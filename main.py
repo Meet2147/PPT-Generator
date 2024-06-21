@@ -53,7 +53,7 @@ def apply_uniform_font(text_frame, font_size):
             run.font.name = FONT_NAME
 
 def create_presentation(topic, slide_titles, slide_contents, file_path):
-    prs = pptx.Presentation("Data Mining _presentation (1).pptx")
+    prs = pptx.Presentation("https://github.com/Meet2147/PPT-Generator/blob/main/template.pptx")
 
     # Remove all existing slides from the template
     xml_slides = prs.slides._sldIdLst  
