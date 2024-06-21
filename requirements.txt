@@ -3,3 +3,4 @@ python-pptx
 pydantic
 uvicorn
 dotenv
+openai
