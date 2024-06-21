@@ -2,4 +2,4 @@ fastapi
 python-pptx
 pydantic
 uvicorn
-openai
+openai==0.28
