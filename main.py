@@ -8,6 +8,7 @@ import os
 from dotenv import load_dotenv
 import tempfile
 
+TEMPLATE_URL = "https://github.com/Meet2147/PPT-Generator/blob/main/template.pptx?raw=true"
 app = FastAPI()
 
 load_dotenv()
