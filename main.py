@@ -34,7 +34,7 @@ def download_template(url):
         raise HTTPException(status_code=500, detail="Failed to download template")
 
 def generate_slide_titles(topic):
-    prompt = f"Generate 5 slide titles for the given topic '{topic}'."
+    prompt = f"Generate 10 slide titles for the given topic '{topic}'."
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
