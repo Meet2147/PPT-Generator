@@ -7,21 +7,31 @@ from pptx.util import Inches, Pt
 import os
 from dotenv import load_dotenv
 import tempfile
+import requests
 
-TEMPLATE_URL = "https://github.com/Meet2147/PPT-Generator/blob/main/template.pptx?raw=true"
 app = FastAPI()
 
 load_dotenv()
 
-openai.api_key = os.getenv('OPENAI_API_KEY') #replace with your actual API key
+openai.api_key = os.getenv('OPENAI_API_KEY')  # replace with your actual API key
 
 # Custom formatting options
 TITLE_FONT_SIZE = Pt(30)
 SLIDE_FONT_SIZE = Pt(16)
 FONT_NAME = "Arial"
+TEMPLATE_URL = "https://github.com/Meet2147/PPT-Generator/blob/main/template.pptx?raw=true"
 
 class PresentationRequest(BaseModel):
     topic: str
+
+def download_template(url):
+    response = requests.get(url)
+    if response.status_code == 200:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as tmp:
+            tmp.write(response.content)
+            return tmp.name
+    else:
+        raise HTTPException(status_code=500, detail="Failed to download template")
 
 def generate_slide_titles(topic):
     prompt = f"Generate 5 slide titles for the given topic '{topic}'."
@@ -45,7 +55,7 @@ def generate_slide_content(slide_title):
         ],
         max_tokens=200
     )
-    return response['choices'][0]['message']['content'].strip().split("\n")
+    return response['choices'][0]['message']['content']
 
 def apply_uniform_font(text_frame, font_size):
     for paragraph in text_frame.paragraphs:
@@ -53,8 +63,8 @@ def apply_uniform_font(text_frame, font_size):
             run.font.size = font_size
             run.font.name = FONT_NAME
 
-def create_presentation(topic, slide_titles, slide_contents, file_path):
-    prs = pptx.Presentation("https://github.com/Meet2147/PPT-Generator/blob/main/template.pptx")
+def create_presentation(topic, slide_titles, slide_contents, template_path, output_path):
+    prs = pptx.Presentation(template_path)
 
     # Remove all existing slides from the template
     xml_slides = prs.slides._sldIdLst  
@@ -76,8 +86,8 @@ def create_presentation(topic, slide_titles, slide_contents, file_path):
         body_shape.text = slide_content
         apply_uniform_font(body_shape.text_frame, SLIDE_FONT_SIZE)
 
-    prs.save(file_path)
-    return file_path
+    prs.save(output_path)
+    return output_path
 
 @app.post("/generate_presentation/")
 def generate_presentation(request: PresentationRequest):
@@ -85,9 +95,11 @@ def generate_presentation(request: PresentationRequest):
         topic = request.topic
         slide_titles = generate_slide_titles(topic)
         slide_contents = [generate_slide_content(title) for title in slide_titles]
+
+        template_path = download_template(TEMPLATE_URL)
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as tmp:
-            presentation_path = create_presentation(topic, slide_titles, slide_contents, tmp.name)
+            presentation_path = create_presentation(topic, slide_titles, slide_contents, template_path, tmp.name)
         
         return FileResponse(presentation_path, filename=f"{topic}_presentation.pptx")
     except Exception as e:
