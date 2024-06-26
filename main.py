@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from fastapi.responses import FileResponse
 import openai
 import pptx
-from pptx.util import Inches, Pt
+from pptx.util import Pt
 import os
 from dotenv import load_dotenv
 import tempfile
@@ -85,6 +85,7 @@ def create_presentation(topic, slide_titles, slide_contents, template_path, outp
 
         body_shape = slide.shapes.placeholders[1]
         text_frame = body_shape.text_frame
+        text_frame.clear()  # Clear any existing paragraphs
         p = text_frame.add_paragraph()
         p.text = slide_content
         apply_uniform_font(text_frame, SLIDE_FONT_SIZE)
