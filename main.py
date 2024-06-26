@@ -84,8 +84,10 @@ def create_presentation(topic, slide_titles, slide_contents, template_path, outp
         apply_uniform_font(slide.shapes.title.text_frame, TITLE_FONT_SIZE)
 
         body_shape = slide.shapes.placeholders[1]
-        body_shape.text = slide_content
-        apply_uniform_font(body_shape.text_frame, SLIDE_FONT_SIZE)
+        text_frame = body_shape.text_frame
+        p = text_frame.add_paragraph()
+        p.text = slide_content
+        apply_uniform_font(text_frame, SLIDE_FONT_SIZE)
 
     prs.save(output_path)
     return output_path
@@ -122,18 +124,31 @@ async def generate_presentation_from_pdf(file: UploadFile = File(...)):
             pdf_path = tmp.name
 
         text = extract_text_from_pdf(pdf_path)
-        prompt = f"Generate 10 slide titles and content from the following text:\n\n{text}"
-        response = openai.ChatCompletion.create(
+
+        # Generate titles and content using the extracted text
+        slide_titles_prompt = f"Generate 10 slide titles from the following text:\n\n{text}"
+        slide_titles_response = openai.ChatCompletion.create(
             model="gpt-4-turbo",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": slide_titles_prompt}
             ],
-            max_tokens=500
+            max_tokens=200
         )
-        result = response['choices'][0]['message']['content'].strip().split('\n')
-        slide_titles = result[:10]
-        slide_contents = result[10:]
+        slide_titles = slide_titles_response['choices'][0]['message']['content'].strip().split("\n")
+
+        slide_contents = []
+        for title in slide_titles:
+            slide_content_prompt = f"Generate content for the slide titled '{title}' from the following text:\n\n{text}"
+            slide_content_response = openai.ChatCompletion.create(
+                model="gpt-4-turbo",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "user", "content": slide_content_prompt}
+                ],
+                max_tokens=200
+            )
+            slide_contents.append(slide_content_response['choices'][0]['message']['content'].strip())
 
         template_path = download_template(TEMPLATE_URL)
         
