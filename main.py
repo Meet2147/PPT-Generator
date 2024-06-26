@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from fastapi.responses import FileResponse
 import openai
@@ -8,12 +8,13 @@ import os
 from dotenv import load_dotenv
 import tempfile
 import requests
+import fitz  # PyMuPDF
 
 app = FastAPI()
 
 load_dotenv()
 
-openai.api_key = os.getenv('OPENAI_API_KEY')  # replace with your actual API key
+openai.api_key = os.getenv("OPENAI_API_KEY")  # replace with your actual API key
 
 # Custom formatting options
 TITLE_FONT_SIZE = Pt(30)
@@ -36,7 +37,7 @@ def download_template(url):
 def generate_slide_titles(topic):
     prompt = f"Generate 10 slide titles for the given topic '{topic}'."
     response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4-turbo",
         messages=[
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": prompt}
@@ -48,7 +49,7 @@ def generate_slide_titles(topic):
 def generate_slide_content(slide_title):
     prompt = f"Generate content for the slide: '{slide_title}'."
     response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4-turbo",
         messages=[
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": prompt}
@@ -89,6 +90,14 @@ def create_presentation(topic, slide_titles, slide_contents, template_path, outp
     prs.save(output_path)
     return output_path
 
+def extract_text_from_pdf(file_path):
+    document = fitz.open(file_path)
+    text = ""
+    for page_num in range(len(document)):
+        page = document.load_page(page_num)
+        text += page.get_text()
+    return text
+
 @app.post("/generate_presentation/")
 def generate_presentation(request: PresentationRequest):
     try:
@@ -102,5 +111,35 @@ def generate_presentation(request: PresentationRequest):
             presentation_path = create_presentation(topic, slide_titles, slide_contents, template_path, tmp.name)
         
         return FileResponse(presentation_path, filename=f"{topic}_presentation.pptx")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/generate_presentation_from_pdf/")
+async def generate_presentation_from_pdf(file: UploadFile = File(...)):
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(await file.read())
+            pdf_path = tmp.name
+
+        text = extract_text_from_pdf(pdf_path)
+        prompt = f"Generate 10 slide titles and content from the following text:\n\n{text}"
+        response = openai.ChatCompletion.create(
+            model="gpt-4-turbo",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=500
+        )
+        result = response['choices'][0]['message']['content'].strip().split('\n')
+        slide_titles = result[:10]
+        slide_contents = result[10:]
+
+        template_path = download_template(TEMPLATE_URL)
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as tmp:
+            presentation_path = create_presentation("Presentation from PDF", slide_titles, slide_contents, template_path, tmp.name)
+        
+        return FileResponse(presentation_path, filename="presentation_from_pdf.pptx")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
