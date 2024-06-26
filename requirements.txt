@@ -3,3 +3,4 @@ python-pptx
 pydantic
 uvicorn
 openai==0.28
+PyMuPDF
