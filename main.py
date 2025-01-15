@@ -1,14 +1,13 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from fastapi.responses import FileResponse
-import openai
 import pptx
 from pptx.util import Inches, Pt
-import os
-from dotenv import load_dotenv
 import tempfile
 import requests
+import os
+from dotenv import load_dotenv
 import logging
+import fitz  # PyMuPDF for extracting text from PDFs
 
 app = FastAPI()
 
@@ -18,23 +17,51 @@ logging.basicConfig(level=logging.INFO)
 # Load environment variables
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
-UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY")  # Add your Unsplash API key here
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
-# Constants for formatting
+# Constants for layout
+LEFT_COLUMN_WIDTH = Inches(4)
+RIGHT_COLUMN_WIDTH = Inches(4)
 TITLE_FONT_SIZE = Pt(28)
-SLIDE_FONT_SIZE = Pt(18)
+BODY_FONT_SIZE = Pt(18)
 FONT_NAME = "Calibri"
 
-class PresentationRequest(BaseModel):
-    topic: str
-
-def generate_slide_titles(topic):
+def extract_text_from_pdf(pdf_path):
     """
-    Generate 7 concise, engaging slide titles for the presentation.
+    Extracts text from an uploaded PDF.
+    """
+    document = fitz.open(pdf_path)
+    text = ""
+    for page in document:
+        text += page.get_text()
+    return text
+
+def generate_presentation_data(pdf_content, topic):
+    """
+    Generate slide titles, content, and image queries from a single OpenAI API call.
     """
     prompt = f"""
-    Generate 7 concise, engaging slide titles for a professional PowerPoint presentation on the topic: '{topic}'.
-    Ensure the titles are clear and aligned with key subtopics.
+    You are tasked with creating a professional PowerPoint presentation based on the following content and topic:
+    
+    Topic: {topic}
+    Content: {pdf_content[:1000]}  # Limit content sent to OpenAI for efficiency.
+    
+    Generate the following:
+    1. Seven slide titles.
+    2. Three to five bullet points for each slide title.
+    3. A descriptive image query for each slide title.
+    
+    Output the data in the following JSON format:
+    {{
+        "slides": [
+            {{
+                "title": "Slide Title 1",
+                "content": ["Bullet point 1", "Bullet point 2", "Bullet point 3"],
+                "image_query": "Image query 1"
+            }},
+            ...
+        ]
+    }}
     """
     response = openai.ChatCompletion.create(
         model="gpt-4",
@@ -42,138 +69,111 @@ def generate_slide_titles(topic):
             {"role": "system", "content": "You are a presentation design expert."},
             {"role": "user", "content": prompt}
         ],
-        max_tokens=150
-    )
-    return [title.strip() for title in response['choices'][0]['message']['content'].strip().split("\n") if title.strip()]
-
-def generate_slide_content(slide_title, topic):
-    """
-    Generate 3-5 concise bullet points for a slide based on the title and topic.
-    """
-    prompt = f"""
-    Write 3-5 concise bullet points for a PowerPoint slide titled: '{slide_title}', which is part of a presentation on the topic '{topic}'.
-    Focus on key insights and avoid lengthy paragraphs.
-    """
-    response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "You are a presentation content expert."},
-            {"role": "user", "content": prompt}
-        ],
-        max_tokens=150
+        max_tokens=1000
     )
     return response['choices'][0]['message']['content']
 
-def generate_image_query(slide_title, topic):
+def search_image(search_query, Pexels_api_key, file_path):
     """
-    Generate a descriptive query for fetching relevant images.
+    Search for and download an image using the Pexels API.
     """
-    prompt = f"""
-    Provide a short descriptive query for an image related to the PowerPoint slide titled '{slide_title}'.
-    The slide is part of a presentation on the topic '{topic}'.
-    Make the query concise and specific to fetch a relevant image.
-    """
-    response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "You are an expert in visual content design."},
-            {"role": "user", "content": prompt}
-        ],
-        max_tokens=50
-    )
-    return response['choices'][0]['message']['content'].strip()
+    base_url = "https://api.pexels.com/v1/search"
+    headers = {"Authorization": Pexels_api_key}
+    params = {"query": search_query, "per_page": 1}
 
-def fetch_image_from_unsplash(query):
-    """
-    Fetch an image from Unsplash based on a given query.
-    """
-    url = f"https://api.unsplash.com/photos/random?query={query}&client_id={UNSPLASH_ACCESS_KEY}"
-    response = requests.get(url)
+    response = requests.get(base_url, headers=headers, params=params)
     if response.status_code == 200:
-        image_url = response.json().get('urls', {}).get('regular')
-        logging.info(f"Image URL for '{query}': {image_url}")
-        return image_url
-    logging.error(f"Unsplash API failed for query: {query} | Status Code: {response.status_code}")
-    return None
+        results = response.json()
+        if results["photos"]:
+            image_url = results["photos"][0]["src"]["original"]
+            # Download the image
+            img_data = requests.get(image_url).content
+            with open(file_path, 'wb') as handler:
+                handler.write(img_data)
+            return file_path
+        else:
+            return None
+    else:
+        raise HTTPException(status_code=500, detail="Error fetching image from Pexels API")
 
-def download_image(url):
+def clear_template_slides(prs):
     """
-    Download an image from a given URL and save it temporarily.
+    Clear all existing slides in the presentation template.
     """
-    try:
-        response = requests.get(url, stream=True)
-        if response.status_code == 200:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                tmp.write(response.content)
-                logging.info(f"Image downloaded successfully: {tmp.name}")
-                return tmp.name
-        logging.error(f"Failed to download image from URL: {url} | Status Code: {response.status_code}")
-    except Exception as e:
-        logging.error(f"Error downloading image: {str(e)}")
-    return None
+    xml_slides = prs.slides._sldIdLst  # Access the slide list in the XML structure
+    slides_to_remove = list(xml_slides)  # Create a list of slides to remove
+    for slide in slides_to_remove:
+        xml_slides.remove(slide)  # Remove each slide
 
-def apply_uniform_font(text_frame, font_size):
+def create_presentation(template_path, slides_data, output_path):
     """
-    Apply uniform font to text in a text frame.
+    Create a PowerPoint presentation using the uploaded template and generated data.
     """
-    for paragraph in text_frame.paragraphs:
-        for run in paragraph.runs:
-            run.font.size = font_size
-            run.font.name = FONT_NAME
+    prs = pptx.Presentation(template_path)
 
-def create_presentation(topic, slide_titles, slide_contents, output_path):
-    """
-    Create a PowerPoint presentation with slides, content, and relevant images.
-    """
-    prs = pptx.Presentation()
+    # Clear existing slides in the template
+    clear_template_slides(prs)
 
-    # Add title slide
-    title_slide = prs.slides.add_slide(prs.slide_layouts[0])
-    title_slide.shapes.title.text = topic
-    apply_uniform_font(title_slide.shapes.title.text_frame, TITLE_FONT_SIZE)
-
-    # Add content slides
-    for slide_title, slide_content in zip(slide_titles, slide_contents):
+    # Add new slides with generated content
+    for slide_data in slides_data:
         slide = prs.slides.add_slide(prs.slide_layouts[5])  # Blank layout
-        title_shape = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(8), Inches(1))
-        title_shape.text = slide_title
-        apply_uniform_font(title_shape.text_frame, TITLE_FONT_SIZE)
 
-        content_shape = slide.shapes.add_textbox(Inches(0.5), Inches(1.5), Inches(8), Inches(3))
-        text_frame = content_shape.text_frame
+        # Add text to the left column
+        left_column = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), LEFT_COLUMN_WIDTH, Inches(5))
+        text_frame = left_column.text_frame
         text_frame.clear()
-        for bullet in slide_content.split("\n"):
+        title_paragraph = text_frame.add_paragraph()
+        title_paragraph.text = slide_data["title"]
+        title_paragraph.font.size = TITLE_FONT_SIZE
+        title_paragraph.font.name = FONT_NAME
+
+        for bullet in slide_data["content"]:
             paragraph = text_frame.add_paragraph()
             paragraph.text = bullet.strip()
-            apply_uniform_font(text_frame, SLIDE_FONT_SIZE)
+            paragraph.font.size = BODY_FONT_SIZE
+            paragraph.font.name = FONT_NAME
 
-        # Fetch and add relevant image
-        image_query = generate_image_query(slide_title, topic)
-        image_url = fetch_image_from_unsplash(image_query)
-        if image_url:
-            image_path = download_image(image_url)
-            if image_path:
-                try:
-                    slide.shapes.add_picture(image_path, Inches(5), Inches(1.5), Inches(3), Inches(2))
-                    logging.info(f"Image added to slide: {slide_title}")
-                except Exception as e:
-                    logging.error(f"Failed to add image to slide '{slide_title}': {str(e)}")
+        # Fetch and add an image to the right column
+        image_path = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg").name
+        try:
+            image_file = search_image(slide_data["image_query"], PEXELS_API_KEY, image_path)
+            if image_file:
+                slide.shapes.add_picture(image_file, Inches(5.5), Inches(0.5), RIGHT_COLUMN_WIDTH, Inches(5))
+        except Exception as e:
+            logging.error(f"Failed to fetch or add image for slide '{slide_data['title']}': {str(e)}")
 
     prs.save(output_path)
     return output_path
 
 @app.post("/generate_presentation/")
-def generate_presentation(request: PresentationRequest):
+async def generate_presentation(
+    topic: str = Form(...),
+    pdf: UploadFile = File(...),
+    template: UploadFile = File(...)
+):
     try:
-        topic = request.topic
-        slide_titles = generate_slide_titles(topic)
-        slide_contents = [generate_slide_content(title, topic) for title in slide_titles]
+        # Save uploaded PDF
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            pdf_path = tmp.name
+            tmp.write(pdf.file.read())
 
-        # Generate presentation
+        # Save uploaded template
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as tmp:
-            presentation_path = create_presentation(topic, slide_titles, slide_contents, tmp.name)
+            template_path = tmp.name
+            tmp.write(template.file.read())
 
-        return FileResponse(presentation_path, filename=f"{topic}_presentation.pptx", media_type='application/vnd.openxmlformats-officedocument.presentationml.presentation')
+        # Extract text from PDF
+        pdf_content = extract_text_from_pdf(pdf_path)
+
+        # Generate presentation data
+        presentation_data = generate_presentation_data(pdf_content, topic)
+        slides_data = eval(presentation_data)["slides"]
+
+        # Generate the presentation
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as tmp:
+            output_path = create_presentation(template_path, slides_data, tmp.name)
+
+        return FileResponse(output_path, filename=f"{topic}_Presentation.pptx", media_type='application/vnd.openxmlformats-officedocument.presentationml.presentation')
     except Exception as e:
         logging.error(f"Error generating presentation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
