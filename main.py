@@ -47,8 +47,8 @@ def generate_presentation_data(pdf_content, topic):
     Content: {pdf_content[:1000]}  # Limit content sent to OpenAI for efficiency.
     
     Generate the following:
-    1. Seven slide titles.
-    2. Three to five bullet points for each slide title.
+    1. Ten slide titles.
+    2. Five bullet points for each slide title.
     3. A descriptive image query for each slide title.
     
     Output the data in the following JSON format:
@@ -56,7 +56,7 @@ def generate_presentation_data(pdf_content, topic):
         "slides": [
             {{
                 "title": "Slide Title 1",
-                "content": ["Bullet point 1", "Bullet point 2", "Bullet point 3"],
+                "content": ["Bullet point 1", "Bullet point 2", "Bullet point 3", "Bullet point 4", "Bullet point 5"],
                 "image_query": "Image query 1"
             }},
             ...
