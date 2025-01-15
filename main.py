@@ -8,7 +8,7 @@ import os
 from dotenv import load_dotenv
 import logging
 import fitz  # PyMuPDF for extracting text from PDFs
-
+import openai
 app = FastAPI()
 
 # Set up logging
