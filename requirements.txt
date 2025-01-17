@@ -6,3 +6,4 @@ openai==0.28
 PyMuPDF
 python-dotenv
 python-multipart
+python-jose
