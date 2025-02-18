@@ -10,6 +10,8 @@ import logging
 import requests
 import json
 from dotenv import load_dotenv
+from fastapi.responses import FileResponse
+import shutil
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -83,10 +85,19 @@ async def generate_presentation(
         pdf_content = extract_text_from_pdf(pdf_path)
         slides_data = generate_presentation_data(pdf_content, topic)
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as output_file:
-            output_path = create_presentation(slides_data["slides"], output_file.name)
+        output_file_path = tempfile.NamedTemporaryFile(delete=False, suffix=".pptx").name
+        create_presentation(slides_data["slides"], output_file_path)
 
-        return FileResponse(output_path, filename=f"{topic}_Presentation.pptx")
+        # Ensure the file is properly closed and moved to prevent corruption
+        response_file_path = f"/tmp/{topic}_Presentation.pptx"
+        shutil.move(output_file_path, response_file_path)
+
+        return FileResponse(
+            path=response_file_path,
+            filename=f"{topic}_Presentation.pptx",
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
+
     except Exception as e:
         logging.error(f"Error generating presentation: {str(e)}")
         raise HTTPException(status_code=500, detail="An error occurred while generating the presentation.")
