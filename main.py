@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 import pptx
 from pptx.util import Inches, Pt
@@ -70,16 +70,12 @@ def generate_presentation_data(pdf_content, topic):
         raise HTTPException(status_code=500, detail="Failed to parse OpenAI response. Ensure valid JSON format.")
 
 # Main API endpoint
-@app.post("/generate_presentation/")
+@app.get("/generate_presentation/")
 async def generate_presentation(
     topic: str = Query(..., description="Topic of the presentation"),
-    pdf: UploadFile = File(..., description="PDF file containing content")
+    pdf_path: str = Query(..., description="Path to the PDF file")
 ):
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as pdf_file:
-            pdf_path = pdf_file.name
-            pdf_file.write(await pdf.read())
-
         pdf_content = extract_text_from_pdf(pdf_path)
         slides_data = generate_presentation_data(pdf_content, topic)
 
