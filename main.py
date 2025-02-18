@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.responses import FileResponse
 import pptx
 from pptx.util import Inches, Pt
@@ -10,7 +10,6 @@ import logging
 import requests
 import json
 from dotenv import load_dotenv
-from fastapi.responses import FileResponse
 import shutil
 
 # Initialize FastAPI app
@@ -37,14 +36,11 @@ def extract_text_from_pdf(pdf_path):
 # OpenAI data generation
 def generate_presentation_data(pdf_content, topic):
     prompt = f"""
-    Create a PowerPoint presentation for the topic '{topic}' with content:
-    {pdf_content[:1000]}.
-    Generate:
-    - 10 slide titles
-    - 5 bullet points per slide
-    - Image queries for each slide.
+    Create a PowerPoint presentation for the topic '{topic}'.
+    The content is: {pdf_content[:1000]}.
 
-    Output in JSON:
+    Return the response **strictly in JSON format** with the following structure:
+
     {{
         "slides": [
             {{
@@ -55,6 +51,8 @@ def generate_presentation_data(pdf_content, topic):
             ...
         ]
     }}
+
+    Ensure it is valid JSON without extra text.
     """
     response = openai.ChatCompletion.create(
         model="gpt-4",
@@ -64,7 +62,7 @@ def generate_presentation_data(pdf_content, topic):
 
     try:
         logging.info(f"Raw OpenAI response: {response}")
-        content = response.choices[0].message.content
+        content = response.choices[0].message.content.strip()
         slides_data = json.loads(content)
         return slides_data
     except json.JSONDecodeError as e:
@@ -74,8 +72,8 @@ def generate_presentation_data(pdf_content, topic):
 # Main API endpoint
 @app.post("/generate_presentation/")
 async def generate_presentation(
-    topic: str = Form(...),
-    pdf: UploadFile = File(...),
+    topic: str = Query(..., description="Topic of the presentation"),
+    pdf: UploadFile = File(..., description="PDF file containing content")
 ):
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as pdf_file:
@@ -88,7 +86,6 @@ async def generate_presentation(
         output_file_path = tempfile.NamedTemporaryFile(delete=False, suffix=".pptx").name
         create_presentation(slides_data["slides"], output_file_path)
 
-        # Ensure the file is properly closed and moved to prevent corruption
         response_file_path = f"/tmp/{topic}_Presentation.pptx"
         shutil.move(output_file_path, response_file_path)
 
@@ -97,7 +94,6 @@ async def generate_presentation(
             filename=f"{topic}_Presentation.pptx",
             media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         )
-
     except Exception as e:
         logging.error(f"Error generating presentation: {str(e)}")
         raise HTTPException(status_code=500, detail="An error occurred while generating the presentation.")
