@@ -1,139 +1,166 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query
-from fastapi.responses import FileResponse
-import pptx
-from pptx.util import Inches, Pt
-import tempfile
-import fitz  # PyMuPDF for extracting text from PDFs
+from fastapi import FastAPI, Request, Query
+from fastapi.responses import FileResponse, JSONResponse
 import openai
 import os
-import logging
-import requests
-import json
+import random
+import aiofiles
+from pptx import Presentation
+from pathlib import Path
 from dotenv import load_dotenv
-import shutil
 
-# Initialize FastAPI app
-app = FastAPI()
-
-# Load environment variables
+# Load environment variables from a .env file
 load_dotenv()
 
-# Access environment variables
-openai.api_key = os.getenv("OPENAI_API_KEY")
-PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
+# Fetch API Key from Environment Variables
+openai_api_key = os.getenv("OPENAI_API_KEY")
 
-# Logging configuration
-logging.basicConfig(level=logging.INFO)
+# Ensure API Key is set
+if not openai_api_key:
+    raise ValueError("Missing OpenAI API Key! Please set OPENAI_API_KEY in environment variables.")
 
-# PDF content extraction
-def extract_text_from_pdf(pdf_path):
-    document = fitz.open(pdf_path)
-    text = ""
-    for page in document:
-        text += page.get_text()
-    return text
+openai.api_key = openai_api_key  # Set the API key
 
-# OpenAI data generation
-def generate_presentation_data(pdf_content, topic):
-    prompt = f"""
-    Create a PowerPoint presentation for the topic '{topic}'.
-    The content is: {pdf_content[:1000]}.
+app = FastAPI()
 
-    Return the response **strictly in JSON format** with the following structure:
+# Ensure directories exist
+os.makedirs("GeneratedPresentations", exist_ok=True)
+os.makedirs("Cache", exist_ok=True)
 
-    {{
-        "slides": [
-            {{
-                "title": "Slide Title",
-                "content": ["Point 1", "Point 2", "Point 3", "Point 4", "Point 5"],
-                "image_query": "query"
-            }},
-            ...
-        ]
-    }}
+# OpenAI Prompt for PPT Content Generation
+Prompt = """Write a presentation/powerpoint about the user's topic. You only answer with the presentation. Follow the structure of the example.
+- Keep texts under 500 characters.
+- Use very short titles.
+- The presentation should have:
+    - Table of contents.
+    - Summary.
+    - At least 8 slides.
 
-    Ensure it is valid JSON without extra text.
-    """
+Example format:
+#Title: TITLE OF THE PRESENTATION
+
+#Slide: 1
+#Header: Table of Contents
+#Content: 1. CONTENT OF THIS POWERPOINT
+2. CONTENTS OF THIS POWERPOINT
+3. CONTENT OF THIS POWERPOINT
+
+#Slide: 2
+#Header: TITLE OF SLIDE
+#Content: CONTENT OF THE SLIDE
+
+#Slide: END
+"""
+
+async def generate_ppt_text(topic: str):
+    """Generate PowerPoint content using OpenAI"""
     response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=1000,
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": Prompt},
+            {"role": "user", "content": f"The user wants a presentation about {topic}."}
+        ],
+        temperature=0.5,
+        max_tokens=1000
     )
+    return response.choices[0].message.content.strip()
 
-    try:
-        logging.info(f"Raw OpenAI response: {response}")
-        content = response.choices[0].message.content.strip()
-        slides_data = json.loads(content)
-        return slides_data
-    except json.JSONDecodeError as e:
-        logging.error(f"Error parsing JSON from OpenAI response: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to parse OpenAI response. Ensure valid JSON format.")
-
-# Main API endpoint
-@app.post("/generate_presentation/")
-async def generate_presentation(
-    topic: str = Query(..., description="Topic of the presentation"),
-    pdf: UploadFile = File(..., description="PDF file containing content")
-):
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as pdf_file:
-            pdf_path = pdf_file.name
-            pdf_file.write(await pdf.read())
-
-        pdf_content = extract_text_from_pdf(pdf_path)
-        slides_data = generate_presentation_data(pdf_content, topic)
-
-        output_file_path = tempfile.NamedTemporaryFile(delete=False, suffix=".pptx").name
-        create_presentation(slides_data["slides"], output_file_path)
-
-        response_file_path = f"/tmp/{topic}_Presentation.pptx"
-        shutil.move(output_file_path, response_file_path)
-
-        return FileResponse(
-            path=response_file_path,
-            filename=f"{topic}_Presentation.pptx",
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        )
-    except Exception as e:
-        logging.error(f"Error generating presentation: {str(e)}")
-        raise HTTPException(status_code=500, detail="An error occurred while generating the presentation.")
-
-# Pexels image search
-def search_image(search_query, file_path):
-    base_url = "https://api.pexels.com/v1/search"
-    headers = {"Authorization": PEXELS_API_KEY}
-    params = {"query": search_query, "per_page": 1}
-
-    response = requests.get(base_url, headers=headers, params=params)
-    if response.status_code == 200:
-        results = response.json()
-        if results["photos"]:
-            image_url = results["photos"][0]["src"]["medium"]
-            img_data = requests.get(image_url).content
-            with open(file_path, "wb") as f:
-                f.write(img_data)
-            return file_path
-    return None
-
-# Create PowerPoint presentation
-def create_presentation(slides_data, output_path):
-    prs = pptx.Presentation()
+async def create_ppt(text_file: str, design_number: int, ppt_name: str):
+    """Creates a PowerPoint presentation from a text file."""
+    design_template = Path(f"Designs/Design-{design_number}.pptx")
+    if not design_template.exists():
+        design_template = Path("Designs/Design-1.pptx")  # Default fallback
     
-    for slide_data in slides_data:
-        slide = prs.slides.add_slide(prs.slide_layouts[5])
-        title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(8), Inches(1))
-        title_box.text = slide_data["title"]
+    prs = Presentation(design_template)
+    slide_count = 0
+    header = ""
+    content = ""
+    last_slide_layout_index = -1
+    firsttime = True
 
-        left_column = slide.shapes.add_textbox(Inches(0.5), Inches(1.5), Inches(4), Inches(5))
-        for bullet in slide_data["content"]:
-            p = left_column.text_frame.add_paragraph()
-            p.text = bullet
+    async with aiofiles.open(text_file, "r", encoding="utf-8") as f:
+        lines = await f.readlines()
+    
+    for line in lines:
+        if line.startswith("#Title:"):
+            header = line.replace("#Title:", "").strip()
+            slide = prs.slides.add_slide(prs.slide_layouts[0])
+            slide.shapes.title.text = header
+            continue
+        
+        elif line.startswith("#Slide:"):
+            if slide_count > 0:
+                slide = prs.slides.add_slide(prs.slide_layouts[slide_layout_index])
+                slide.shapes.title.text = header
+                body_shape = slide.shapes.placeholders[slide_placeholder_index]
+                body_shape.text = content
+            content = ""
+            slide_count += 1
+            slide_layout_index = last_slide_layout_index
+            layout_indices = [1, 7, 8]
+            
+            while slide_layout_index == last_slide_layout_index:
+                if firsttime:
+                    slide_layout_index = 1
+                    slide_placeholder_index = 1
+                    firsttime = False
+                    break
+                slide_layout_index = random.choice(layout_indices)
+                slide_placeholder_index = 2 if slide_layout_index == 8 else 1
+            
+            last_slide_layout_index = slide_layout_index
+            continue
 
-        image_path = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg").name
-        search_query = slide_data["image_query"]
-        image_file = search_image(search_query, image_path)
-        if image_file:
-            slide.shapes.add_picture(image_file, Inches(5), Inches(1.5), Inches(4), Inches(3))
+        elif line.startswith("#Header:"):
+            header = line.replace("#Header:", "").strip()
+            continue
 
-    prs.save(output_path)
-    return output_path
+        elif line.startswith("#Content:"):
+            content = line.replace("#Content:", "").strip()
+            continue
+
+    ppt_path = f"GeneratedPresentations/{ppt_name}.pptx"
+    prs.save(ppt_path)
+    return ppt_path
+
+@app.get("/generate-ppt/")
+async def generate_ppt(request: Request, topic: str = Query(..., description="Enter the topic for the presentation"), design: int = 1):
+    """Generates a PowerPoint and returns a downloadable link."""
+    if design > 7 or design <= 0:
+        design = 1  # Default design if an invalid one is chosen
+
+    # Generate filename using OpenAI API
+    filename_prompt = f"Generate a short, descriptive filename based on this topic: \"{topic}\". Just return the filename."
+    filename_response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[{"role": "system", "content": filename_prompt}],
+        temperature=0.5,
+        max_tokens=200,
+    )
+    
+    filename = filename_response.choices[0].message.content.strip().replace(" ", "_")
+
+    text_file_path = f"Cache/{filename}.txt"
+    
+    # Generate and save text
+    ppt_content = await generate_ppt_text(topic)
+    async with aiofiles.open(text_file_path, "w", encoding="utf-8") as f:
+        await f.write(ppt_content)
+
+    # Create PPT
+    ppt_path = await create_ppt(text_file_path, design, filename)
+
+    # Generate download link
+    download_url = str(request.base_url) + f"download-ppt/{filename}.pptx"
+    return JSONResponse({"download_link": download_url})
+
+@app.get("/download-ppt/{ppt_filename}")
+async def download_ppt(ppt_filename: str):
+    """Serves the generated PowerPoint file."""
+    ppt_path = f"GeneratedPresentations/{ppt_filename}"
+    if not os.path.exists(ppt_path):
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    return FileResponse(ppt_path, filename=ppt_filename, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
