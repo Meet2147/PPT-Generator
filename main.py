@@ -143,7 +143,7 @@ async def generate_ppt(request: Request, topic: str = Query(..., description="En
     ppt_path = await create_ppt(text_file_path, design, filename)
 
     # **Updated Auto-Download Link**
-    auto_download_url = f"https://ppt-generator-umkg.onrender.com/auto-download/{filename}.pptx"
+    auto_download_url = f"https://ppt-generator-mtu0.onrender.com/auto-download/{filename}.pptx"
     
     return JSONResponse({"auto_download_link": auto_download_url})
 
