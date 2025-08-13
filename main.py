@@ -740,7 +740,7 @@ async def generate_ppt(user_input: str):
             
         file_path = await create_presentation_async(presentation_text, design_number, filename)
         
-        auto_download_url = f"https://ce7fd010ddfa.ngrok-free.app/auto-download/{Path(file_path).name}"
+        auto_download_url = f"https://ppt-generator-mtu0.onrender.com/auto-download/{Path(file_path).name}"
 
         return {"status": "success", "url": auto_download_url}
     
