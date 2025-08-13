@@ -2,9 +2,12 @@ fastapi
 python-pptx
 pydantic
 uvicorn
-openai==0.28
+g4f
 PyMuPDF
 python-dotenv
 python-multipart
 python-jose
 aiofiles
+requests
+fastapi
+uvicorn
