@@ -517,6 +517,14 @@ client = Client()
 
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # tighten for prod
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 Path("GeneratedPresentations").mkdir(exist_ok=True)
 Path("Cache").mkdir(exist_ok=True)
 
