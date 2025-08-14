@@ -451,6 +451,7 @@ from g4f.client import Client
 from pptx.util import Inches
 from fastapi import FastAPI, Response
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 import shutil
 import uvicorn
 import uuid
