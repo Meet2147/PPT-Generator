@@ -549,7 +549,7 @@ async def generate_presentation_text_async(user_input: str) -> str:
     try:
         resp = await asyncio.to_thread(
             client.chat.completions.create,
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": PROMPT_TEMPLATE},
                 {"role": "user", "content": f"The user wants a presentation about {user_input}"},
