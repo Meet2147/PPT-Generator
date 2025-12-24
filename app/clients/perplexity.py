@@ -46,4 +46,10 @@ class PerplexityClient:
 
         data = r.json()
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        return content if isinstance(content, str) else str(content or "")
+        return f"""
+            {{
+              "error": "perplexity_error",
+              "status": {r.status_code},
+              "message": {r.text!r}
+            }}
+            """
