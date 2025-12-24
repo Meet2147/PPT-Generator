@@ -9,5 +9,8 @@ python-multipart
 python-jose
 aiofiles
 requests
-fastapi
-uvicorn
+pydantic-settings==2.7.0
+python-multipart==0.0.20
+httpx==0.28.1
+orjson==3.10.12
+
