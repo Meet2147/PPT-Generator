@@ -15,61 +15,40 @@ def b64encode_bytes(data: bytes) -> str:
 class ModelJSONError(Exception):
     pass
 
-def _extract_first_json_block(s: str) -> str:
-    """
-    Returns the first valid JSON object/array block from a string by scanning braces/brackets.
-    Handles nested JSON and braces inside quoted strings.
-    """
-    if not s or not isinstance(s, str):
-        raise ModelJSONError("Empty model output")
-
-    start = None
-    stack: List[str] = []
-    in_string = False
-    escape = False
-
-    for i, ch in enumerate(s):
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-        else:
-            if ch == '"':
-                in_string = True
-                continue
-
-        if ch in "{[":
-            if start is None:
-                start = i
-            stack.append(ch)
-        elif ch in "}]":
-            if not stack:
-                continue
-            opener = stack.pop()
-            if (opener == "{" and ch != "}") or (opener == "[" and ch != "]"):
-                # mismatched, reset and continue searching
-                start = None
-                stack = []
-                continue
-
-            if start is not None and not stack:
-                return s[start : i + 1]
-
-    raise ModelJSONError("No valid JSON object/array found in model output")
-
 def extract_json_object(text: str) -> Union[Dict[str, Any], List[Any]]:
     """
-    Extracts and parses the first JSON object/array found in 'text'.
-    Raises ModelJSONError if parsing fails.
+    Robust JSON extractor:
+    - Finds first JSON object/array in text
+    - Uses json.JSONDecoder().raw_decode for partial + extra text
+    - Works even if model returns: "Sure! {...}\n\nMore text"
     """
-    block = _extract_first_json_block(text.strip())
+    if not text or not isinstance(text, str):
+        raise ModelJSONError("Empty model output")
 
+    s = text.strip()
+
+    # Find first '{' or '['
+    start_candidates = [i for i in (s.find("{"), s.find("[")) if i != -1]
+    if not start_candidates:
+        excerpt = s[:200].replace("\n", "\\n")
+        raise ModelJSONError(f"No valid JSON object/array found in model output; excerpt={excerpt}")
+
+    start = min(start_candidates)
+    s2 = s[start:]
+
+    decoder = json.JSONDecoder()
     try:
-        return json.loads(block)
-    except Exception as e:
-        excerpt = block[:300].replace("\n", "\\n")
-        raise ModelJSONError(f"Invalid JSON from model: {e}; excerpt={excerpt}")
+        obj, _ = decoder.raw_decode(s2)
+        return obj
+    except json.JSONDecodeError:
+        # Try progressive trimming from end (handles truncated tail text)
+        for cut in range(len(s2), max(len(s2) - 4000, 0), -1):
+            chunk = s2[:cut].rstrip()
+            try:
+                obj, _ = decoder.raw_decode(chunk)
+                return obj
+            except Exception:
+                continue
+
+        excerpt = s2[:300].replace("\n", "\\n")
+        raise ModelJSONError(f"Invalid JSON from model; excerpt={excerpt}")
