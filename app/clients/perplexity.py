@@ -1,10 +1,13 @@
-import httpx
+# app/clients/perplexity.py
+from __future__ import annotations
+
 from typing import Optional
+import httpx
 
 class PerplexityClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
-        self.base_url = "https://api.perplexity.ai/chat/completions"
+        self.base_url = "https://api.perplexity.ai"
 
     async def chat(
         self,
@@ -13,12 +16,9 @@ class PerplexityClient:
         user: str,
         temperature: float = 0.2,
         max_tokens: int = 1200,
-        search_recency_filter: Optional[str] = None,
     ) -> str:
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        if not self.api_key:
+            raise RuntimeError("Missing PPLX_API_KEY / pplx_api_key")
 
         payload = {
             "model": model,
@@ -30,19 +30,20 @@ class PerplexityClient:
             "max_tokens": max_tokens,
             "top_p": 0.95,
             "stream": False,
-
-            # ✅ FORCE JSON
-            "response_format": {"type": "json_object"},
         }
 
-        # optional (keep if you’re using it)
-        if search_recency_filter:
-            payload["search_recency_filter"] = search_recency_filter
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
 
-        async with httpx.AsyncClient(timeout=90) as client:
-            r = await client.post(self.base_url, headers=headers, json=payload)
-            r.raise_for_status()
-            data = r.json()
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
 
-        content = data["choices"][0]["message"]["content"]
-        return content if isinstance(content, str) else str(content)
+        # If 400: return full detail for debugging in your API response/logs
+        if r.status_code != 200:
+            raise RuntimeError(f"Perplexity API error {r.status_code}: {r.text}")
+
+        data = r.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        return content if isinstance(content, str) else str(content or "")
