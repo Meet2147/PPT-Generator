@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
@@ -36,7 +38,7 @@ class PortionEstimate(BaseModel):
     grams_total: float = Field(ge=0.0)
     items_count: Optional[float] = Field(default=None, ge=0.0)
     household: Optional[str] = None
-    confidence: float = Field(default=0.6, ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
     assumptions: List[str] = Field(default_factory=list)
 
 class PortionResponse(BaseModel):
@@ -45,19 +47,20 @@ class PortionResponse(BaseModel):
 
 # ---------- Nutrition ----------
 
+class NutrientsRequest(BaseModel):
+    food_name: str
+    # IMPORTANT: optional so FastAPI doesn't reject before handler
+    portion: Optional[PortionEstimate] = None
+    region: Optional[str] = "IN"
+    brand: Optional[str] = None
+    include_per_100g: bool = True
+
 class NutrientItem(BaseModel):
     name: str
     amount: float
     unit: str
     per_100g_amount: Optional[float] = None
     daily_value_percent: Optional[float] = None
-
-class NutrientsRequest(BaseModel):
-    food_name: str
-    portion: Optional[PortionEstimate] = None  # IMPORTANT: allow null, validate manually
-    region: Optional[str] = "IN"
-    brand: Optional[str] = None
-    include_per_100g: bool = True
 
 class NutrientsResponse(BaseModel):
     food_name: str
