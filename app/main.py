@@ -687,7 +687,7 @@ async def analyze_text(req: AnalyzeTextRequest):
         system=NUTRIENTS_SYSTEM,
         user=nutrients_prompt(nreq),
         temperature=0.2,
-        max_tokens=1600,
+        max_tokens=900,
         search_recency_filter="month",
     )
 
