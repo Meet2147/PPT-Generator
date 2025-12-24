@@ -6,7 +6,8 @@ import asyncio
 from io import BytesIO
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Union
-
+import re
+from typing import Any, Dict
 import requests
 from pptx import Presentation
 from pptx.util import Inches
@@ -237,7 +238,36 @@ assumptions={p.assumptions}
 # Normalizers
 # --------------------------------------------------
 
+_NUM_RE = re.compile(r"-?\d+(\.\d+)?")
+
+def _to_float(v: Any, default: float) -> float:
+    if v is None:
+        return default
+    if isinstance(v, bool):
+        # avoid bool becoming 0/1 silently
+        return default
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        m = _NUM_RE.search(v.replace(",", ""))
+        return float(m.group(0)) if m else default
+    return default
+
+def _to_float_or_none(v: Any) -> float | None:
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        m = _NUM_RE.search(v.replace(",", ""))
+        return float(m.group(0)) if m else None
+    return None
+
 def normalize_portion_obj(obj: Dict[str, Any]) -> Dict[str, Any]:
+    obj = dict(obj or {})
+
     obj.setdefault("servings", 1.0)
     obj.setdefault("grams_total", 0.0)
     obj.setdefault("items_count", None)
@@ -247,30 +277,29 @@ def normalize_portion_obj(obj: Dict[str, Any]) -> Dict[str, Any]:
 
     # household must be string or None
     h = obj.get("household")
-    if isinstance(h, (int, float, bool)):
+    if h is None:
+        obj["household"] = None
+    elif not isinstance(h, str):
         obj["household"] = str(h)
-    elif h is not None and not isinstance(h, str):
-        obj["household"] = str(h)
 
-    if not isinstance(obj.get("assumptions"), list):
-        obj["assumptions"] = [str(obj["assumptions"])]
-
-    obj["servings"] = float(obj["servings"] or 1.0)
-    obj["grams_total"] = float(obj["grams_total"] or 0.0)
-
-    ic = obj.get("items_count")
-    if ic is None:
-        obj["items_count"] = None
+    # assumptions must be list[str]
+    a = obj.get("assumptions")
+    if a is None:
+        obj["assumptions"] = []
+    elif isinstance(a, list):
+        obj["assumptions"] = [str(x) for x in a]
+    elif isinstance(a, str):
+        obj["assumptions"] = [x.strip() for x in a.split(",") if x.strip()]
     else:
-        try:
-            obj["items_count"] = float(ic)
-        except Exception:
-            obj["items_count"] = None
+        obj["assumptions"] = [str(a)]
 
-    try:
-        obj["confidence"] = float(obj["confidence"])
-    except Exception:
-        obj["confidence"] = 0.6
+    # Coerce numerics safely (handles "40g", "about 80 grams", "2 rotis")
+    obj["servings"] = _to_float(obj.get("servings"), 1.0)
+    obj["grams_total"] = _to_float(obj.get("grams_total"), 0.0)
+    obj["items_count"] = _to_float_or_none(obj.get("items_count"))
+
+    conf = _to_float(obj.get("confidence"), 0.6)
+    obj["confidence"] = max(0.0, min(1.0, conf))
 
     return obj
 
