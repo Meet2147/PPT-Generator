@@ -593,29 +593,44 @@ async def estimate_portion_image(
 
 @app.post("/v1/food/nutrients", response_model=NutrientsResponse)
 async def nutrients(req: NutrientsRequest):
-    # hard guard (prevents your 'portion:null' issue)
-    if req.portion is None:
-        raise HTTPException(status_code=422, detail="portion is required. Call /v1/food/portion first.")
-
-    out = await pplx.chat(
-        model=settings.pplx_sonar_model,
-        system=NUTRIENTS_SYSTEM,
-        user=nutrients_prompt(req),
-        temperature=0.2,
-        max_tokens=1600,
-        search_recency_filter="month",
-    )
-
-    # Sonar may return prose → try JSON; else repair using Gemini
     try:
-        raw = model_json_or_400(out)
-        if not isinstance(raw, dict):
-            raise HTTPException(status_code=400, detail="Nutrients output not an object")
-    except HTTPException:
-        raw = await force_json_with_gemini("NutrientsResponse schema", out)
+        if req.portion is None:
+            raise HTTPException(
+                status_code=422,
+                detail="portion is required. Call /v1/food/portion first."
+            )
 
-    raw = normalize_nutrients_obj(raw, req)
-    return NutrientsResponse.model_validate(raw)
+        out = await pplx.chat(
+            model=settings.pplx_sonar_model,
+            system=NUTRIENTS_SYSTEM,
+            user=nutrients_prompt(req),
+            temperature=0.2,
+            max_tokens=1600,
+        )
+
+        try:
+            raw = model_json_or_400(out)
+        except HTTPException:
+            raw = await force_json_with_gemini(
+                "NutrientsResponse schema",
+                out
+            )
+
+        raw = normalize_nutrients_obj(raw, req)
+        return NutrientsResponse.model_validate(raw)
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        # 🔥 FINAL SAFETY NET
+        return ORJSONResponse(
+            status_code=500,
+            content={
+                "error": "internal_error",
+                "message": str(e),
+            },
+        )
 
 @app.post("/v1/food/analyze", response_model=AnalyzeResponse)
 async def analyze_text(req: AnalyzeTextRequest):
