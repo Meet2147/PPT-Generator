@@ -637,78 +637,90 @@ async def nutrients(req: NutrientsRequest):
 
 @app.post("/v1/food/analyze", response_model=AnalyzeResponse)
 async def analyze_text(req: AnalyzeTextRequest):
-    # 1) Identify
-    identify_out = await gemini.generate_text(
-        model=settings.gemini_classifier_model,
-        system=IDENTIFY_SYSTEM,
-        prompt=identify_user_prompt_text(req.text, req.hints),
-        temperature=0.2,
-        max_output_tokens=700,
-    )
-    identify_raw = model_json_or_400(identify_out)
-    identify_obj = normalize_identify_obj(identify_raw)
-    identify_res = IdentifyResponse.model_validate(identify_obj)
-    chosen = identify_res.chosen.normalized_name or identify_res.chosen.name
-
-    # 2) Portion (text)
-    portion_out = await gemini.generate_text(
-        model=settings.gemini_portion_model,
-        system=PORTION_SYSTEM,
-        prompt=portion_prompt_text(
-            food_name=chosen,
-            servings=1.0,
-            household=None,
-            ctx=req.text,
-        ),
-        temperature=0.2,
-        max_output_tokens=700,
-    )
-    portion_raw = model_json_or_400(portion_out)
-    portion_raw = normalize_portion_obj(portion_raw if isinstance(portion_raw, dict) else {})
-    portion_est = PortionEstimate.model_validate(portion_raw)
-
-    if portion_est.grams_total <= 0:
-        portion_est = PortionEstimate(
-            servings=1.0,
-            grams_total=100.0,
-            household="1 serving (default 100g)",
-            confidence=0.3,
-            assumptions=["Defaulted to 100g because model output was uncertain"]
-        )
-    portion_res = PortionResponse(food_name=chosen, portion=portion_est)
-
-    # 3) Nutrients
-    nreq = NutrientsRequest(
-        food_name=chosen,
-        portion=portion_est,
-        region=req.region,
-        include_per_100g=req.include_per_100g,
-    )
-
-    nutrients_out = await pplx.chat(
-        model=settings.pplx_sonar_model,
-        system=NUTRIENTS_SYSTEM,
-        user=nutrients_prompt(nreq),
-        temperature=0.2,
-        max_tokens=900
-    )
-
     try:
-        nutrients_raw = model_json_or_400(nutrients_out)
-        if not isinstance(nutrients_raw, dict):
-            raise HTTPException(status_code=400, detail="Nutrients output not an object")
-    except HTTPException:
-        nutrients_raw = await force_json_with_gemini("NutrientsResponse schema", nutrients_out)
+        # 1) Identify
+        identify_out = await gemini.generate_text(
+            model=settings.gemini_classifier_model,
+            system=IDENTIFY_SYSTEM,
+            prompt=identify_user_prompt_text(req.text, req.hints),
+            temperature=0.2,
+            max_output_tokens=700,
+        )
 
-    nutrients_raw = normalize_nutrients_obj(nutrients_raw, nreq)
-    nutrients_res = NutrientsResponse.model_validate(nutrients_raw)
+        identify_raw = await model_json_or_repair(
+            identify_out,
+            schema_hint='{"candidates":[{"name":string,"confidence":number,"normalized_name":string,"cuisine":string|null,"is_packaged":boolean|null,"notes":string|null}],"chosen":{...}}'
+        )
+        identify_raw = normalize_identify_obj(identify_raw)
+        identify_res = IdentifyResponse.model_validate(identify_raw)
+        chosen = identify_res.chosen.normalized_name or identify_res.chosen.name
 
-    return AnalyzeResponse(
-        identify=identify_res,
-        portion=portion_res,
-        nutrients=nutrients_res,
-        cost_tier={"identify": "$", "portion": "$$", "nutrients": "$$$$"},
-    )
+        # 2) Portion
+        portion_out = await gemini.generate_text(
+            model=settings.gemini_portion_model,
+            system=PORTION_SYSTEM,
+            prompt=portion_prompt_text(
+                food_name=chosen,
+                servings=1.0,
+                household=None,
+                ctx=req.text,
+            ),
+            temperature=0.2,
+            max_output_tokens=900,
+        )
+
+        portion_raw = await model_json_or_repair(
+            portion_out,
+            schema_hint='{"servings":number,"grams_total":number,"items_count":number|null,"household":string|null,"confidence":number,"assumptions":[string]}'
+        )
+        portion_raw = normalize_portion_obj(portion_raw)
+        portion_est = PortionEstimate.model_validate(portion_raw)
+
+        if portion_est.grams_total <= 0:
+            portion_est = PortionEstimate(
+                servings=1.0,
+                grams_total=100.0,
+                household="1 serving (default 100g)",
+                confidence=0.3,
+                assumptions=["Defaulted to 100g because model output was uncertain"],
+            )
+
+        portion_res = PortionResponse(food_name=chosen, portion=portion_est)
+
+        # 3) Nutrients (Sonar)
+        nreq = NutrientsRequest(
+            food_name=chosen,
+            portion=portion_est,
+            region=req.region,
+            include_per_100g=req.include_per_100g,
+        )
+
+        nutrients_out = await pplx.chat(
+            model=settings.pplx_sonar_model,
+            system=NUTRIENTS_SYSTEM,
+            user=nutrients_prompt(nreq),
+            temperature=0.2,
+            max_tokens=1100,
+        )
+
+        nutrients_raw = await model_json_or_repair(
+            nutrients_out,
+            schema_hint='{"food_name":string,"portion":object,"calories_kcal":number,"macros":object,"micros":object,"vitamins":object,"minerals":object,"ingredients_guess":[string],"allergens_guess":[string],"data_sources":[string],"notes":[string]}'
+        )
+
+        nutrients_raw = normalize_nutrients_obj(nutrients_raw, nreq)
+        nutrients_res = NutrientsResponse.model_validate(nutrients_raw)
+
+        return AnalyzeResponse(
+            identify=identify_res,
+            portion=portion_res,
+            nutrients=nutrients_res,
+            cost_tier={"identify": "$", "portion": "$$", "nutrients": "$$$$"},
+        )
+
+    except Exception as e:
+        # ALWAYS JSON response so jq never breaks
+        return json_error(500, str(e))
 
 @app.post("/v1/food/analyze-image", response_model=AnalyzeResponse)
 async def analyze_image(
