@@ -15,7 +15,7 @@ class PerplexityClient:
         system: str,
         user: str,
         temperature: float = 0.2,
-        max_tokens: int = 1200,
+        max_tokens: int = 900,
     ) -> str:
         if not self.api_key:
             raise RuntimeError("Missing PPLX_API_KEY / pplx_api_key")
@@ -37,7 +37,7 @@ class PerplexityClient:
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=120) as client:
             r = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
 
         # If 400: return full detail for debugging in your API response/logs
