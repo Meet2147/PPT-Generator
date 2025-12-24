@@ -202,10 +202,11 @@ Rules:
 - household MUST be string or null.
 """.strip()
 
-NUTRIENTS_SYSTEM = """You are a nutrition engine.
-Return ONLY valid JSON. No markdown. No extra text.
-Output MUST match NutrientsResponse schema exactly.
-All nutrient values must be objects (not strings like "2.7g").
+NUTRIENTS_SYSTEM = """
+You are a nutrition analysis engine.
+You MUST output ONLY a single valid JSON object.
+No markdown. No backticks. No explanation. No bullet points.
+If you cannot estimate a field, still output it with a sensible numeric value (0) or null as per schema.
 """
 
 def nutrients_prompt(req: NutrientsRequest) -> str:
