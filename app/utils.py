@@ -4,10 +4,6 @@ import re
 import json
 from typing import Any, Dict, List, Union
 
-class ModelJSONError(Exception):
-    pass
-
-
 
 def b64encode_bytes(data: bytes) -> str:
     return base64.b64encode(data).decode("utf-8")
