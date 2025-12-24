@@ -104,7 +104,13 @@
 from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
+from pydantic import BaseModel, ConfigDict
+
 InputMode = Literal["text", "image"]
+
+
+class StrictBaseModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 # ---------- Identify ----------
 
