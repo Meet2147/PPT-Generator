@@ -214,31 +214,34 @@ def model_json_or_400(text: str) -> Dict[str, Any] | List[Any]:
         print("MODEL_RAW_OUTPUT:\n", (text or "")[:2000])
         raise HTTPException(status_code=400, detail=str(e))
 
-async def force_json_with_gemini(schema_hint: str, text: str) -> Dict[str, Any]:
-    """
-    Sonar may output prose; Gemini will convert to strict JSON.
-    """
-    prompt = f"""
-Convert the following content into STRICT JSON.
-Return ONLY JSON. No markdown. No explanation.
+async def force_json_with_gemini(schema_hint: str, text: str) -> dict:
+    repair_system = (
+        "You are a JSON repair tool. "
+        "Return ONLY valid JSON. No markdown, no extra text."
+    )
+    repair_prompt = f"""
+The following text was supposed to be JSON but is invalid/truncated.
 
-Required schema (high level):
+Goal schema:
 {schema_hint}
 
-Content:
+Input:
 {text}
+
+Return ONLY the corrected JSON. If impossible, return {{}}.
 """.strip()
 
-    out = await gemini.generate_text(
-        model=settings.gemini_classifier_model,
-        system="You convert text into strict JSON. Output JSON only.",
-        prompt=prompt,
+    repaired = await gemini.generate_text(
+        model=settings.gemini_portion_model,  # gemini flash is fine
+        system=repair_system,
+        prompt=repair_prompt,
         temperature=0.0,
-        max_output_tokens=1600,
+        max_output_tokens=1200,
     )
-    obj = model_json_or_400(out)
+
+    obj = extract_json_object(repaired)
     if not isinstance(obj, dict):
-        raise HTTPException(status_code=400, detail="Gemini JSON repair did not return an object")
+        raise HTTPException(status_code=400, detail="Repair model did not return a JSON object")
     return obj
 
 def normalize_identify_obj(raw: Any) -> Dict[str, Any]:
