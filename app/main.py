@@ -39,6 +39,15 @@ app = FastAPI(
 gemini = GeminiClient(api_key=settings.gemini_api_key)
 pplx = PerplexityClient(api_key=settings.pplx_api_key)
 
+GENERATED_DIR = Path(os.getenv("GENERATED_DIR", "GeneratedPresentations"))
+CACHE_DIR = Path(os.getenv("CACHE_DIR", "Cache"))
+DESIGNS_DIR = Path(os.getenv("DESIGNS_DIR", "Designs"))
+
+GENERATED_DIR.mkdir(exist_ok=True)
+CACHE_DIR.mkdir(exist_ok=True)
+DESIGNS_DIR.mkdir(exist_ok=True)
+
+
 # ---------------- Global JSON error handler (prevents jq explosions) ----------------
 
 @app.exception_handler(Exception)
