@@ -521,3 +521,54 @@ async def analyze_text(req: AnalyzeTextRequest):
         nutrients=nutrients_res,
         cost_tier={"identify": "$", "portion": "$$", "nutrients": "$$$$"},
     )
+
+# --------------------------------------------------
+# PPT Routes (single instance)
+# --------------------------------------------------
+
+@app.post("/v1/ppt/generate", response_model=PPTGenerateResponse)
+async def generate_ppt(req: PPTGenerateRequest):
+    topic = (req.topic or "").strip()
+    if not topic:
+        raise HTTPException(422, "topic is required")
+
+    design_number = req.design_number
+    if design_number < 1 or design_number > 7:
+        design_number = 1
+
+    safe_topic = re.sub(r"[^\w\s\.\-\(\)]", "", topic).replace("\n", "").strip()
+    filename = f"{safe_topic[:40]}_{uuid.uuid4().hex}"
+
+    deck_text = await generate_presentation_text_async(safe_topic)
+    fallback_used = False
+    if not deck_text:
+        deck_text = _local_fallback_presentation(safe_topic)
+        fallback_used = True
+
+    ppt_path = await create_presentation_async(deck_text, design_number, filename)
+
+    base_url = (settings.public_base_url or "").rstrip("/")
+    if not base_url:
+        # Render provides your onrender URL; easiest is to set PUBLIC_BASE_URL env var in Render
+        # Example: https://your-service.onrender.com
+        base_url = "https://api.dashovia.com"
+
+    download_url = f"{base_url}/v1/ppt/download/{Path(ppt_path).name}"
+
+    return PPTGenerateResponse(
+        status="success",
+        filename=Path(ppt_path).name,
+        # download_url=download_url,
+        fallback_used=fallback_used,
+    )
+
+@app.get("/v1/ppt/download/{filename}")
+async def download_ppt(filename: str):
+    file_path = GENERATED_DIR / filename
+    if not file_path.is_file():
+        raise HTTPException(404, "File not found")
+    return FileResponse(
+        file_path,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=filename,
+    )
