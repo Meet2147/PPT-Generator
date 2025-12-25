@@ -88,3 +88,15 @@ class AnalyzeResponse(BaseModel):
     portion: PortionResponse
     nutrients: NutrientsResponse
     cost_tier: Dict[str, str]
+
+# ---------- PPT Generator ----------
+
+class PPTGenerateRequest(BaseModel):
+    topic: str
+    design_number: int = Field(default=2, ge=1, le=7)
+
+class PPTGenerateResponse(BaseModel):
+    status: str
+    filename: str
+    download_url: str
+    fallback_used: bool = False
