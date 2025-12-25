@@ -141,6 +141,254 @@ Rules:
 - No citations, no links, no search_results.
 """.strip()
 
+PROMPT_TEMPLATE = """Write a presentation/powerpoint about the user's topic. You only answer with the presentation. Follow the structure of the example.
+
+Notice:
+- You do all the presentation text for the user.
+- You write the texts no longer than 250 characters!
+- You make very short titles!
+- You make the presentation easy to understand.
+- The presentation has a table of contents.
+- The presentation has a summary.
+- At least 7 slides.
+- For each slide, after the #Content: line, add an #Image: line describing a relevant image that could visually represent the slide's topic.
+- If no image is relevant, write #Image: none.
+
+Example! - Stick to this formatting exactly!
+#Title: TITLE OF THE PRESENTATION
+
+#Slide: 1
+#Header: table of contents
+#Content: 1. CONTENT OF THIS POWERPOINT
+2. CONTENTS OF THIS POWERPOINT
+3. CONTENT OF THIS POWERPOINT
+#Image: a 3D illustration of a table of contents in a book
+
+#Slide: 2
+#Header: TITLE OF SLIDE
+#Content: CONTENT OF THE SLIDE
+#Image: relevant illustration description here
+
+#Slide: 3
+#Header: TITLE OF SLIDE
+#Content: CONTENT OF THE SLIDE
+#Image: relevant illustration description here
+
+#Slide: 4
+#Header: TITLE OF SLIDE
+#Content: CONTENT OF THE SLIDE
+#Image: relevant illustration description here
+
+#Slide: 5
+#Header: TITLE OF SLIDE
+#Content: CONTENT OF THE SLIDE
+#Image: relevant illustration description here
+
+#Slide: 6
+#Header: TITLE OF SLIDE
+#Content: CONTENT OF THE SLIDE
+#Image: relevant illustration description here
+
+#Slide: 7
+#Header: summary
+#Content: CONTENT OF THE SUMMARY
+#Image: an illustration of a person reviewing a summary report
+
+#Slide: END"""
+
+def _local_fallback_presentation(topic: str) -> str:
+    t = (topic or "Your Topic").title()
+    return f"""#Title: {t}
+
+#Slide: 1
+#Header: table of contents
+#Content: 1. Intro
+2. Why it matters
+3. Key points
+4. Examples
+5. Tips
+6. Pitfalls
+7. Summary
+#Image: a 3D illustration of a table of contents in a book
+
+#Slide: 2
+#Header: intro
+#Content: Brief overview of {topic}. Scope and goal.
+#Image: relevant illustration
+
+#Slide: 3
+#Header: why it matters
+#Content: Impact, use-cases, and benefits in simple terms.
+#Image: simple infographic
+
+#Slide: 4
+#Header: key points
+#Content: 3–5 core ideas about {topic}.
+#Image: icons representing key ideas
+
+#Slide: 5
+#Header: examples
+#Content: 2–3 quick examples.
+#Image: storyboard-like illustration
+
+#Slide: 6
+#Header: tips & pitfalls
+#Content: Do's and don'ts.
+#Image: checklist illustration
+
+#Slide: 7
+#Header: summary
+#Content: Short recap and next steps.
+#Image: an illustration of a person reviewing a summary report
+
+#Slide: END
+"""
+
+async def generate_presentation_text_async(topic: str) -> str:
+    # IMPORTANT: uses YOUR PerplexityClient (same service instance)
+    system = PROMPT_TEMPLATE
+    user = f"The user wants a presentation about {topic}"
+
+    try:
+        content = await pplx.chat(
+            model=settings.pplx_sonar_model,
+            system=system,
+            user=user,
+            temperature=0.35,
+            max_tokens=1400,
+            search_recency_filter="month",
+        )
+        if "#Title:" not in content or "#Slide:" not in content:
+            return ""
+        return content
+    except Exception:
+        return ""
+
+async def create_presentation_async(text_content: str, design_number: int, presentation_name: str) -> str:
+    template_path = DESIGNS_DIR / f"Design-{design_number}.pptx"
+    if not template_path.exists():
+        template_path = DESIGNS_DIR / "Design-1.pptx"
+
+    if template_path.exists():
+        try:
+            prs = Presentation(str(template_path))
+        except Exception:
+            prs = Presentation()
+    else:
+        prs = Presentation()
+
+    # Layout helpers
+    def _safe_layout(idx: int) -> int:
+        if len(prs.slide_layouts) == 0:
+            return 0
+        return max(0, min(idx, len(prs.slide_layouts) - 1))
+
+    slide_layout_index = _safe_layout(1 if len(prs.slide_layouts) > 1 else 0)
+    slide_placeholder_index = 1 if len(prs.slide_layouts) > 1 else 0
+
+    slide_title = ""
+    slide_content = ""
+    slide_image_prompt = None
+    slide_count = 0
+    last_layout = -1
+    first_time = True
+
+    lines = [ln.rstrip("\n") for ln in text_content.splitlines()]
+    i = 0
+
+    async def commit_slide():
+        nonlocal slide_title, slide_content, slide_image_prompt, slide_count
+        if slide_count > 0 and (slide_title or slide_content):
+            slide = prs.slides.add_slide(prs.slide_layouts[_safe_layout(slide_layout_index)])
+
+            # title
+            try:
+                slide.shapes.title.text = slide_title
+            except Exception:
+                try:
+                    slide.placeholders[0].text = slide_title
+                except Exception:
+                    pass
+
+            # body
+            try:
+                body = slide.shapes.placeholders[slide_placeholder_index]
+                if hasattr(body, "text_frame"):
+                    body.text_frame.text = slide_content
+                else:
+                    body.text = slide_content
+            except Exception:
+                pass
+
+            # NOTE: Image generation removed for Render stability (g4f is flaky & heavy).
+            # You can add it back later behind a feature flag.
+
+    while i < len(lines):
+        line = lines[i]
+
+        if line.startswith("#Title:"):
+            title = line.replace("#Title:", "").strip()
+            slide = prs.slides.add_slide(prs.slide_layouts[_safe_layout(0)])
+            try:
+                slide.shapes.title.text = title
+            except Exception:
+                pass
+            i += 1
+            continue
+
+        if line.startswith("#Slide:"):
+            await commit_slide()
+            slide_count += 1
+            slide_title = ""
+            slide_content = ""
+            slide_image_prompt = None
+
+            # rotate layouts a bit
+            layouts = [1, 7, 8] if len(prs.slide_layouts) >= 9 else ([1] if len(prs.slide_layouts) > 1 else [0])
+            if first_time:
+                slide_layout_index = _safe_layout(1 if len(prs.slide_layouts) > 1 else 0)
+                slide_placeholder_index = 1 if len(prs.slide_layouts) > 1 else 0
+                first_time = False
+            else:
+                nxt = last_layout
+                tries = 0
+                while nxt == last_layout and tries < 10:
+                    nxt = random.choice(layouts)
+                    tries += 1
+                slide_layout_index = _safe_layout(nxt)
+                slide_placeholder_index = 2 if slide_layout_index == 8 else 1
+
+            last_layout = slide_layout_index
+            i += 1
+            continue
+
+        if line.startswith("#Header:"):
+            slide_title = line.replace("#Header:", "").strip()
+            i += 1
+            continue
+
+        if line.startswith("#Content:"):
+            slide_content = line.replace("#Content:", "").strip()
+            i += 1
+            while i < len(lines) and not lines[i].startswith("#"):
+                slide_content += "\n" + lines[i]
+                i += 1
+            continue
+
+        if line.startswith("#Image:"):
+            slide_image_prompt = line.replace("#Image:", "").strip()
+            i += 1
+            continue
+
+        i += 1
+
+    await commit_slide()
+
+    out_path = GENERATED_DIR / f"{presentation_name}.pptx"
+    await asyncio.to_thread(prs.save, str(out_path))
+    return str(out_path)
+
+
 # ---------------- Helpers ----------------
 
 def model_json_or_400(text: str) -> Any:
