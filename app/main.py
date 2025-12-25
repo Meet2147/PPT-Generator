@@ -1,7 +1,20 @@
 from __future__ import annotations
-
+import os
+import re
+import uuid
+import random
+import asyncio
+from io import BytesIO
+from pathlib import Path
+from typing import Optional, Dict, Any, List, Union
 from typing import Any, Dict, List, Optional
+import requests
+from pptx import Presentation
+from pptx.util import Inches
 
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi.responses import ORJSONResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel
@@ -11,7 +24,7 @@ from app.models import (
     IdentifyRequest, IdentifyResponse,
     PortionRequest, PortionResponse, PortionEstimate,
     NutrientsRequest, NutrientsResponse,
-    AnalyzeTextRequest, AnalyzeResponse,
+    AnalyzeTextRequest, AnalyzeResponse, PPTGenerateRequest, PPTGenerateResponse
 )
 from app.clients.gemini import GeminiClient
 from app.clients.perplexity import PerplexityClient
