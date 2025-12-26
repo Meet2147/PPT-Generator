@@ -98,5 +98,5 @@ class PPTGenerateRequest(BaseModel):
 class PPTGenerateResponse(BaseModel):
     status: str
     filename: str
-    download_url: str
+    # download_url: str
     fallback_used: bool = False
