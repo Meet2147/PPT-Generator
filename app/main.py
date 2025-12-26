@@ -403,20 +403,23 @@ async def compute_nutrients(req: NutrientsRequest) -> NutrientsResponse:
         model=settings.pplx_sonar_model,
         system=NUTRIENTS_SYSTEM,
         user=nutrients_prompt(req),
-        temperature=0.2,
-        max_tokens=900,
+        temperature=0.1,
+        max_tokens=1400,
+        disable_search=True,                      #  [oai_citation:5‡docs.perplexity.ai](https://docs.perplexity.ai/api-reference/chat-completions-post)
+        response_format={"type": "json_object"},  #  [oai_citation:6‡docs.perplexity.ai](https://docs.perplexity.ai/api-reference/chat-completions-post)
     )
 
+    # Since response_format is json_object, `out` should already be valid JSON.
     try:
-        raw = model_json_or_400(out)
+        raw = json.loads(out)
         if not isinstance(raw, dict):
-            raise HTTPException(status_code=400, detail="Nutrients output not a JSON object")
-    except HTTPException:
+            raise ValueError("not an object")
+    except Exception:
+        # Last resort repair via Gemini
         raw = await force_json_with_gemini("NutrientsResponse schema JSON object", out)
 
     raw = normalize_nutrients_obj(raw, req)
     return NutrientsResponse.model_validate(raw)
-
 
 # ---------------- Helpers ----------------
 
