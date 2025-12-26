@@ -879,7 +879,7 @@ async def analyze_image(
     identify = normalize_identify_dict(raw_ident)                     # keep your existing normalize that returns IdentifyResponse
     food_name = identify.chosen.normalized_name or identify.chosen.name
 
-    portion_out = await gemini.generate_with_image(
+        portion_out = await gemini.generate_with_image(
         model=settings.gemini_portion_model,
         system=PORTION_SYSTEM,
         prompt=portion_prompt_image(food_name, ctx=None),
@@ -889,8 +889,11 @@ async def analyze_image(
         max_output_tokens=900,
     )
 
-    raw_portion = model_json_or_400(portion_out)
-    if not isinstance(raw_portion, dict):
+    try:
+        raw_portion = model_json_or_400(portion_out)
+        if not isinstance(raw_portion, dict):
+            raise HTTPException(400, "Portion model returned non-object JSON")
+    except HTTPException:
         raw_portion = await force_json_with_gemini(
             '{"servings":number,"grams_total":number,"items_count":number|null,"household":string|null,"confidence":number,"assumptions":string[]}',
             portion_out,
@@ -899,21 +902,15 @@ async def analyze_image(
     raw_portion = normalize_portion_obj(raw_portion)
     portion = PortionEstimate.model_validate(raw_portion)
 
-    nreq = NutrientsRequest(
-        food_name=food_name,
-        portion=portion,
-        region=region,
-        include_per_100g=include_per_100g,
-    )
-
-    nutrients_res = await compute_nutrients(nreq)
-
-    return AnalyzeResponse(
-        identify=identify,
-        portion=PortionResponse(food_name=food_name, portion=portion),
-        nutrients=nutrients_res,
-        cost_tier={"identify": "$", "portion": "$$", "nutrients": "$$$$"},
-    )
+    if portion.grams_total <= 0:
+        portion = PortionEstimate(
+            servings=1.0,
+            grams_total=100.0,
+            items_count=None,
+            household="1 serving (default 100g)",
+            confidence=0.3,
+            assumptions=["Defaulted to 100g because model output was uncertain"],
+        )
 
 # --------------------------------------------------
 # PPT Routes (single instance)
