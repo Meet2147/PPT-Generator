@@ -398,6 +398,26 @@ async def create_presentation_async(text_content: str, design_number: int, prese
     return str(out_path)
 
 
+async def compute_nutrients(req: NutrientsRequest) -> NutrientsResponse:
+    out = await pplx.chat(
+        model=settings.pplx_sonar_model,
+        system=NUTRIENTS_SYSTEM,
+        user=nutrients_prompt(req),
+        temperature=0.2,
+        max_tokens=900,
+    )
+
+    try:
+        raw = model_json_or_400(out)
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail="Nutrients output not a JSON object")
+    except HTTPException:
+        raw = await force_json_with_gemini("NutrientsResponse schema JSON object", out)
+
+    raw = normalize_nutrients_obj(raw, req)
+    return NutrientsResponse.model_validate(raw)
+
+
 # ---------------- Helpers ----------------
 
 def model_json_or_400(text: str) -> Any:
@@ -748,25 +768,7 @@ async def portion_image(food_name: str, file: UploadFile = File(...), text_conte
 async def nutrients(req: NutrientsRequest):
     if req.portion is None:
         raise HTTPException(status_code=422, detail="portion is required. Call /v1/food/portion first.")
-
-    out = await pplx.chat(
-        model=settings.pplx_sonar_model,
-        system=NUTRIENTS_SYSTEM,
-        user=nutrients_prompt(req),
-        temperature=0.2,
-        max_tokens=900,
-    )
-
-    # Parse/repair
-    try:
-        raw = model_json_or_400(out)
-        if not isinstance(raw, dict):
-            raise HTTPException(status_code=400, detail="Nutrients output not a JSON object.")
-    except HTTPException:
-        raw = await force_json_with_gemini("NutrientsResponse schema JSON object", out)
-
-    raw = normalize_nutrients_obj(raw, req)
-    return NutrientsResponse.model_validate(raw)
+    return await compute_nutrients(req)
 
 @app.post("/v1/food/analyze", response_model=AnalyzeResponse)
 async def analyze_text(req: AnalyzeTextRequest):
@@ -859,7 +861,6 @@ async def analyze_image(
 
     hints_list = [h.strip() for h in (hints or "").split(",") if h.strip()] or None
 
-    # identify (image)
     identify_out = await gemini.generate_with_image(
         model=settings.gemini_classifier_model,
         system=IDENTIFY_SYSTEM,
@@ -869,12 +870,12 @@ async def analyze_image(
         temperature=0.2,
         max_output_tokens=900,
     )
+
     raw_ident = model_json_or_400(identify_out)
-    raw_ident = await identify_repair_if_list(raw_ident, hints_list)
-    identify = normalize_identify_dict(raw_ident)
+    raw_ident = await identify_repair_if_list(raw_ident, hints_list)  # keep your existing repair
+    identify = normalize_identify_dict(raw_ident)                     # keep your existing normalize that returns IdentifyResponse
     food_name = identify.chosen.normalized_name or identify.chosen.name
 
-    # portion (image)
     portion_out = await gemini.generate_with_image(
         model=settings.gemini_portion_model,
         system=PORTION_SYSTEM,
@@ -884,15 +885,25 @@ async def analyze_image(
         temperature=0.2,
         max_output_tokens=900,
     )
+
     raw_portion = model_json_or_400(portion_out)
     if not isinstance(raw_portion, dict):
-        raise HTTPException(400, "Portion model returned invalid JSON")
+        raw_portion = await force_json_with_gemini(
+            '{"servings":number,"grams_total":number,"items_count":number|null,"household":string|null,"confidence":number,"assumptions":string[]}',
+            portion_out,
+        )
+
     raw_portion = normalize_portion_obj(raw_portion)
     portion = PortionEstimate.model_validate(raw_portion)
 
-    # nutrients
-    nreq = NutrientsRequest(food_name=food_name, portion=portion, region=region, include_per_100g=include_per_100g)
-    nutrients_res = await nutrients(nreq)
+    nreq = NutrientsRequest(
+        food_name=food_name,
+        portion=portion,
+        region=region,
+        include_per_100g=include_per_100g,
+    )
+
+    nutrients_res = await compute_nutrients(nreq)
 
     return AnalyzeResponse(
         identify=identify,
