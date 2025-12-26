@@ -791,6 +791,60 @@ async def analyze_text(req: AnalyzeTextRequest):
         nutrients=nutrients_res,
         cost_tier={"identify": "$", "portion": "$$", "nutrients": "$$$$"},
     )
+@app.post("/v1/food/analyze-image", response_model=AnalyzeResponse)
+async def analyze_image(
+    file: UploadFile = File(...),
+    hints: Optional[str] = None,
+    region: str = "IN",
+    include_per_100g: bool = True,
+):
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(400, "Uploaded image is empty")
+
+    hints_list = [h.strip() for h in (hints or "").split(",") if h.strip()] or None
+
+    # identify (image)
+    identify_out = await gemini.generate_with_image(
+        model=settings.gemini_classifier_model,
+        system=IDENTIFY_SYSTEM,
+        prompt=identify_user_prompt_image(hints_list),
+        image_bytes=image_bytes,
+        mime_type=file.content_type or "image/jpeg",
+        temperature=0.2,
+        max_output_tokens=900,
+    )
+    raw_ident = model_json_or_400(identify_out)
+    raw_ident = await identify_repair_if_list(raw_ident, hints_list)
+    identify = normalize_identify_dict(raw_ident)
+    food_name = identify.chosen.normalized_name or identify.chosen.name
+
+    # portion (image)
+    portion_out = await gemini.generate_with_image(
+        model=settings.gemini_portion_model,
+        system=PORTION_SYSTEM,
+        prompt=portion_prompt_image(food_name, ctx=None),
+        image_bytes=image_bytes,
+        mime_type=file.content_type or "image/jpeg",
+        temperature=0.2,
+        max_output_tokens=900,
+    )
+    raw_portion = model_json_or_400(portion_out)
+    if not isinstance(raw_portion, dict):
+        raise HTTPException(400, "Portion model returned invalid JSON")
+    raw_portion = normalize_portion_obj(raw_portion)
+    portion = PortionEstimate.model_validate(raw_portion)
+
+    # nutrients
+    nreq = NutrientsRequest(food_name=food_name, portion=portion, region=region, include_per_100g=include_per_100g)
+    nutrients_res = await nutrients(nreq)
+
+    return AnalyzeResponse(
+        identify=identify,
+        portion=PortionResponse(food_name=food_name, portion=portion),
+        nutrients=nutrients_res,
+        cost_tier={"identify": "$", "portion": "$$", "nutrients": "$$$$"},
+    )
 
 # --------------------------------------------------
 # PPT Routes (single instance)
