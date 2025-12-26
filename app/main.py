@@ -429,6 +429,61 @@ Return ONLY JSON. If impossible, return {{}}.
     obj = model_json_or_400(repaired)
     return obj if isinstance(obj, dict) else {}
 
+
+async def identify_repair_if_list(raw: Any, hints: Optional[List[str]]) -> Dict[str, Any]:
+    if isinstance(raw, list):
+        repair_out = await gemini.generate_text(
+            model=settings.gemini_classifier_model,
+            system=IDENTIFY_REPAIR_SYSTEM,
+            prompt=identify_repair_prompt(raw, hints),
+            temperature=0.2,
+            max_output_tokens=700,
+        )
+        repaired = model_json_or_400(repair_out)
+        if not isinstance(repaired, dict):
+            raise HTTPException(400, "Identify repair did not return a JSON object")
+        return repaired
+
+    if isinstance(raw, dict):
+        return raw
+
+    raise HTTPException(400, "Invalid identify output type")
+
+def normalize_identify_dict(obj: Dict[str, Any]) -> IdentifyResponse:
+    candidates = obj.get("candidates") or []
+    chosen = obj.get("chosen")
+
+    if isinstance(chosen, str):
+        chosen_lower = chosen.strip().lower()
+        match = None
+        for c in candidates:
+            if not isinstance(c, dict):
+                continue
+            if chosen_lower in (
+                str(c.get("name", "")).lower(),
+                str(c.get("normalized_name", "")).lower()
+            ):
+                match = c
+                break
+        if match is None:
+            match = {
+                "name": chosen,
+                "confidence": 0.5,
+                "normalized_name": chosen,
+                "cuisine": None,
+                "is_packaged": None,
+                "notes": "chosen string -> synthesized",
+            }
+            candidates.append(match)
+        obj["chosen"] = match
+        obj["candidates"] = candidates
+
+    if isinstance(obj.get("chosen"), dict) and not obj.get("candidates"):
+        obj["candidates"] = [obj["chosen"]]
+
+    return IdentifyResponse.model_validate(obj)
+
+
 def normalize_identify_obj(obj: Any) -> Dict[str, Any]:
     if not isinstance(obj, dict):
         return {"candidates": [], "chosen": {"name": "unknown", "confidence": 0.0, "normalized_name": "unknown"}}
