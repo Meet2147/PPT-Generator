@@ -18,13 +18,16 @@ class PerplexityClient:
         system: str,
         user: str,
         temperature: float = 0.2,
-        max_tokens: int = 900,
+        max_tokens: int = 1200,
         # Perplexity-specific (optional)
         search_domain_filter: Optional[List[str]] = None,
         search_recency_filter: Optional[str] = None,   # "day"|"week"|"month"|"year"
-        search_mode: Optional[str] = None,             # "web"|"academic"
+        search_mode: Optional[str] = None,             # "web"|"academic"|"sec"
         return_images: bool = False,
         return_related_questions: bool = False,
+        # IMPORTANT: new options
+        disable_search: bool = True,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         url = f"{self.base_url}/chat/completions"
         headers = {
@@ -43,33 +46,32 @@ class PerplexityClient:
             "stream": False,
             "return_images": return_images,
             "return_related_questions": return_related_questions,
+            "disable_search": disable_search,
         }
 
-        # only include when provided (don’t send unknown/None)
+        # Force structured JSON output whenever we need strict parsing
+        if response_format is not None:
+            payload["response_format"] = response_format  #  [oai_citation:1‡docs.perplexity.ai](https://docs.perplexity.ai/api-reference/chat-completions-post)
+
         if search_domain_filter:
             payload["search_domain_filter"] = search_domain_filter
         if search_recency_filter:
-            payload["search_recency_filter"] = search_recency_filter
+            payload["search_recency_filter"] = search_recency_filter  #  [oai_citation:2‡docs.perplexity.ai](https://docs.perplexity.ai/api-reference/chat-completions-post)
         if search_mode:
-            payload["search_mode"] = search_mode
+            payload["search_mode"] = search_mode  #  [oai_citation:3‡docs.perplexity.ai](https://docs.perplexity.ai/api-reference/chat-completions-post)
 
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=90) as client:
             r = await client.post(url, headers=headers, json=payload)
 
-        # If Perplexity rejects params/model, this will be non-200
         if r.status_code != 200:
             raise RuntimeError(f"Perplexity API error {r.status_code}: {r.text[:2000]}")
 
         data = r.json()
-
-        # OpenAI-compatible schema: choices[0].message.content
         content = (
             data.get("choices", [{}])[0]
             .get("message", {})
             .get("content", "")
         )
-
         if not isinstance(content, str):
             content = str(content or "")
-
         return content.strip()
