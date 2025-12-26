@@ -1,55 +1,42 @@
-# app/utils.py
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 
+@dataclass
 class ModelJSONError(Exception):
-    pass
+    message: str
+
+    def __str__(self) -> str:
+        return self.message
 
 
 def extract_json_object(text: str) -> Any:
     """
-    Robustly extract the first JSON object/array from a model response.
-
-    Works even if the model returns:
-    - extra text before/after JSON
-    - JSON + citations
-    - multiple JSON snippets
-    - truncated leading whitespace/newlines
+    Robustly extract the FIRST valid JSON object/array from a messy model output.
+    Handles extra text before/after JSON. Uses json.JSONDecoder().raw_decode.
     """
-    if text is None:
-        raise ModelJSONError("No text to parse")
-
-    s = text.strip()
-    if not s:
-        raise ModelJSONError("Empty model output")
-
-    # Find first '{' or '['
-    start = None
-    for i, ch in enumerate(s):
-        if ch in "{[":
-            start = i
-            break
-    if start is None:
+    if not isinstance(text, str) or not text.strip():
         raise ModelJSONError("No valid JSON object/array found in model output")
 
-    decoder = json.JSONDecoder()
-    tail = s[start:]
+    s = text.strip()
 
+    # Find earliest '{' or '['
+    obj_i = s.find("{")
+    arr_i = s.find("[")
+    starts = [i for i in [obj_i, arr_i] if i != -1]
+    if not starts:
+        raise ModelJSONError("No valid JSON object/array found in model output")
+
+    start = min(starts)
+    s2 = s[start:]
+
+    dec = json.JSONDecoder()
     try:
-        obj, _idx = decoder.raw_decode(tail)
-        return obj
-    except Exception:
-        # Try again by scanning forward a bit (handles leading junk like ```json)
-        for j in range(start + 1, min(len(s), start + 4000)):
-            if s[j] in "{[":
-                try:
-                    obj, _idx = decoder.raw_decode(s[j:])
-                    return obj
-                except Exception:
-                    continue
-
-    excerpt = s[start:start + 250]
-    raise ModelJSONError(f"Invalid JSON from model. Excerpt={excerpt}")
+        parsed, _end = dec.raw_decode(s2)
+        return parsed
+    except Exception as e:
+        excerpt = s2[:220].replace("\n", "\\n")
+        raise ModelJSONError(f"Invalid JSON from model. Excerpt={excerpt}") from e
