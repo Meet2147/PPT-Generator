@@ -1,25 +1,55 @@
+# app/utils.py
+from __future__ import annotations
+
 import json
-from typing import Any, Dict, List, Union
+from typing import Any
+
 
 class ModelJSONError(Exception):
     pass
 
-def extract_json_object(text: str) -> Union[Dict[str, Any], List[Any]]:
-    if not text or not isinstance(text, str):
-        raise ModelJSONError("Empty model output")
+
+def extract_json_object(text: str) -> Any:
+    """
+    Robustly extract the first JSON object/array from a model response.
+
+    Works even if the model returns:
+    - extra text before/after JSON
+    - JSON + citations
+    - multiple JSON snippets
+    - truncated leading whitespace/newlines
+    """
+    if text is None:
+        raise ModelJSONError("No text to parse")
 
     s = text.strip()
+    if not s:
+        raise ModelJSONError("Empty model output")
 
-    # find first JSON start
-    starts = [i for i in (s.find("{"), s.find("[")) if i != -1]
-    if not starts:
-        raise ModelJSONError(f"No JSON start found. Excerpt={s[:200]}")
+    # Find first '{' or '['
+    start = None
+    for i, ch in enumerate(s):
+        if ch in "{[":
+            start = i
+            break
+    if start is None:
+        raise ModelJSONError("No valid JSON object/array found in model output")
 
-    s = s[min(starts):]
-    dec = json.JSONDecoder()
+    decoder = json.JSONDecoder()
+    tail = s[start:]
 
     try:
-        obj, _ = dec.raw_decode(s)   # ✅ reads first valid JSON, ignores rest
+        obj, _idx = decoder.raw_decode(tail)
         return obj
-    except json.JSONDecodeError as e:
-        raise ModelJSONError(f"Invalid JSON from model. Excerpt={s[:200]}")
+    except Exception:
+        # Try again by scanning forward a bit (handles leading junk like ```json)
+        for j in range(start + 1, min(len(s), start + 4000)):
+            if s[j] in "{[":
+                try:
+                    obj, _idx = decoder.raw_decode(s[j:])
+                    return obj
+                except Exception:
+                    continue
+
+    excerpt = s[start:start + 250]
+    raise ModelJSONError(f"Invalid JSON from model. Excerpt={excerpt}")
