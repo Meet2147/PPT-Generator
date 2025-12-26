@@ -828,7 +828,7 @@ async def generate_ppt(req: PPTGenerateRequest):
     return PPTGenerateResponse(
         status="success",
         filename=Path(ppt_path).name,
-        # download_url=download_url,
+        download_url=download_url,
         fallback_used=fallback_used,
     )
 
