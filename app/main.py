@@ -864,6 +864,7 @@ async def analyze_image(
 
     hints_list = [h.strip() for h in (hints or "").split(",") if h.strip()] or None
 
+    # ---------- Identify ----------
     identify_out = await gemini.generate_with_image(
         model=settings.gemini_classifier_model,
         system=IDENTIFY_SYSTEM,
@@ -875,24 +876,23 @@ async def analyze_image(
     )
 
     raw_ident = model_json_or_400(identify_out)
-    raw_ident = await identify_repair_if_list(raw_ident, hints_list)  # keep your existing repair
-    identify = normalize_identify_dict(raw_ident)                     # keep your existing normalize that returns IdentifyResponse
+    raw_ident = await identify_repair_if_list(raw_ident, hints_list)
+    identify = normalize_identify_dict(raw_ident)
     food_name = identify.chosen.normalized_name or identify.chosen.name
 
+    # ---------- Portion ----------
     portion_out = await gemini.generate_with_image(
-    model=settings.gemini_portion_model,
-    system=PORTION_SYSTEM,
-    prompt=portion_prompt_image(food_name, ctx=None),
-    image_bytes=image_bytes,
-    mime_type=file.content_type or "image/jpeg",
-    temperature=0.2,
-    max_output_tokens=900,
+        model=settings.gemini_portion_model,
+        system=PORTION_SYSTEM,
+        prompt=portion_prompt_image(food_name, ctx=None),
+        image_bytes=image_bytes,
+        mime_type=file.content_type or "image/jpeg",
+        temperature=0.2,
+        max_output_tokens=900,
     )
 
     try:
         raw_portion = model_json_or_400(portion_out)
-        if not isinstance(raw_portion, dict):
-            raise HTTPException(400, "Portion model returned non-object JSON")
     except HTTPException:
         raw_portion = await force_json_with_gemini(
             '{"servings":number,"grams_total":number,"items_count":number|null,"household":string|null,"confidence":number,"assumptions":string[]}',
@@ -902,15 +902,22 @@ async def analyze_image(
     raw_portion = normalize_portion_obj(raw_portion)
     portion = PortionEstimate.model_validate(raw_portion)
 
-    if portion.grams_total <= 0:
-        portion = PortionEstimate(
-            servings=1.0,
-            grams_total=100.0,
-            items_count=None,
-            household="1 serving (default 100g)",
-            confidence=0.3,
-            assumptions=["Defaulted to 100g because model output was uncertain"],
-        )
+    # ---------- Nutrients ----------
+    nreq = NutrientsRequest(
+        food_name=food_name,
+        portion=portion,
+        region=region,
+        include_per_100g=include_per_100g,
+    )
+
+    nutrients_res = await compute_nutrients(nreq)
+
+    return AnalyzeResponse(
+        identify=identify,
+        portion=PortionResponse(food_name=food_name, portion=portion),
+        nutrients=nutrients_res,
+        cost_tier={"identify": "$", "portion": "$$", "nutrients": "$$$$"},
+    )
 
 # --------------------------------------------------
 # PPT Routes (single instance)
