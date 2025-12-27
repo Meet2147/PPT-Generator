@@ -879,14 +879,14 @@ async def analyze_image(
     identify = normalize_identify_dict(raw_ident)                     # keep your existing normalize that returns IdentifyResponse
     food_name = identify.chosen.normalized_name or identify.chosen.name
 
-        portion_out = await gemini.generate_with_image(
-        model=settings.gemini_portion_model,
-        system=PORTION_SYSTEM,
-        prompt=portion_prompt_image(food_name, ctx=None),
-        image_bytes=image_bytes,
-        mime_type=file.content_type or "image/jpeg",
-        temperature=0.2,
-        max_output_tokens=900,
+    portion_out = await gemini.generate_with_image(
+    model=settings.gemini_portion_model,
+    system=PORTION_SYSTEM,
+    prompt=portion_prompt_image(food_name, ctx=None),
+    image_bytes=image_bytes,
+    mime_type=file.content_type or "image/jpeg",
+    temperature=0.2,
+    max_output_tokens=900,
     )
 
     try:
