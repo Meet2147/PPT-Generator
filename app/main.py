@@ -1,71 +1,1256 @@
+# import os
+# import re
+# import uuid
+# import random
+# import asyncio
+# from io import BytesIO
+# from pathlib import Path
+# from typing import Optional, Dict, Any, List, Union
+# import re
+# from typing import Any, Dict
+# import requests
+# from pptx import Presentation
+# from pptx.util import Inches
+
+# from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+# from fastapi.responses import ORJSONResponse, FileResponse
+# from fastapi.middleware.cors import CORSMiddleware
+# from pydantic import BaseModel
+
+# from app.config import settings
+# from app.models import (
+#     IdentifyRequest, IdentifyResponse,
+#     PortionRequest, PortionEstimate, PortionResponse,
+#     NutrientsRequest, NutrientsResponse,
+#     AnalyzeResponse,AnalyzeImageItem,
+#     PPTGenerateRequest, PPTGenerateResponse,
+# )
+# from app.clients.gemini import GeminiClient
+# from app.clients.perplexity import PerplexityClient
+# from app.utils import extract_json_object, ModelJSONError
+
+# # --------------------------------------------------
+# # App
+# # --------------------------------------------------
+
+# app = FastAPI(
+#     title="Food + PPT API",
+#     version="1.0.0",
+#     default_response_class=ORJSONResponse,
+# )
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=["*"],   # tighten for prod
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
+# gemini = GeminiClient(api_key=settings.gemini_api_key)
+# pplx = PerplexityClient(api_key=settings.pplx_api_key)
+
+# # --------------------------------------------------
+# # Storage dirs (Render disk recommended if you want persistence)
+# # --------------------------------------------------
+
+# GENERATED_DIR = Path(os.getenv("GENERATED_DIR", "GeneratedPresentations"))
+# CACHE_DIR = Path(os.getenv("CACHE_DIR", "Cache"))
+# DESIGNS_DIR = Path(os.getenv("DESIGNS_DIR", "Designs"))
+
+# GENERATED_DIR.mkdir(exist_ok=True)
+# CACHE_DIR.mkdir(exist_ok=True)
+# DESIGNS_DIR.mkdir(exist_ok=True)
+
+# # --------------------------------------------------
+# # Helpers: JSON parsing
+# # --------------------------------------------------
+
+# def model_json_or_400(text: str) -> Any:
+#     try:
+#         return extract_json_object(text)
+#     except ModelJSONError as e:
+#         # Return 400 with clear excerpt (no stack)
+#         raise HTTPException(status_code=400, detail=str(e))
+
+# # --------------------------------------------------
+# # Food prompts
+# # --------------------------------------------------
+
+# IDENTIFY_SYSTEM = """You are a food identification classifier.
+# Return ONLY valid JSON. No markdown. No extra text.
+# Return EXACT schema with keys: candidates, chosen.
+# """
+
+# def identify_user_prompt_text(text: str, hints: Optional[List[str]]) -> str:
+#     return f"""
+# Return ONE JSON object:
+# {{
+#   "candidates":[
+#     {{
+#       "name":"<as user said>",
+#       "confidence":0.0,
+#       "normalized_name":"<canonical food name>",
+#       "cuisine":null,
+#       "is_packaged":null,
+#       "notes":null
+#     }}
+#   ],
+#   "chosen": {{
+#     "name":"...",
+#     "confidence":0.0,
+#     "normalized_name":"...",
+#     "cuisine":null,
+#     "is_packaged":null,
+#     "notes":null
+#   }}
+# }}
+# Rules:
+# - If multiple foods, include up to 3 candidates.
+# - chosen MUST be an object (NOT a string).
+# User text: {text}
+# Hints: {hints or []}
+# """.strip()
+
+# def identify_user_prompt_image(hints: Optional[List[str]]) -> str:
+#     return f"""
+# Look at the image and identify the FOOD ITEM(S).
+# Return ONLY ONE JSON object. If multiple foods, include them in candidates array.
+
+# Schema:
+# {{
+#   "candidates":[
+#     {{
+#       "name":"<short food name>",
+#       "confidence":0.0,
+#       "normalized_name":"<canonical food name>",
+#       "cuisine":null,
+#       "is_packaged":null,
+#       "notes":null
+#     }}
+#   ],
+#   "chosen": {{
+#     "name":"...",
+#     "confidence":0.0,
+#     "normalized_name":"...",
+#     "cuisine":null,
+#     "is_packaged":null,
+#     "notes":null
+#   }}
+# }}
+# Hints: {hints or []}
+# """.strip()
+
+# IDENTIFY_REPAIR_SYSTEM = """You are a food identifier.
+# Return ONLY ONE valid JSON object in IdentifyResponse schema (candidates + chosen).
+# No markdown. No extra text.
+# """
+
+# def identify_repair_prompt(detections: list, hints: Optional[List[str]]) -> str:
+#     return f"""
+# You received a JSON array from an image model (could be detections like plate/bowl/food labels).
+# Decide the actual FOOD item(s) present and output IdentifyResponse schema.
+
+# Detections JSON array:
+# {detections}
+
+# Hints: {hints or []}
+
+# Rules:
+# - Ignore non-food objects unless they help identify the dish.
+# - Output candidates (up to 3) and chosen (best).
+# - normalized_name should be usable for nutrition lookup.
+# """.strip()
+
+# PORTION_SYSTEM = """You estimate portion sizes.
+# Return ONLY valid JSON. No markdown. No extra text.
+# """
+
+# def portion_prompt_text(food_name: str, servings: float, household: Optional[str], ctx: Optional[str]) -> str:
+#     return f"""
+# Estimate portion for: {food_name}
+# Context: {ctx or ""}
+# User provided: servings={servings}, household_measure={household or ""}
+
+# Return JSON:
+# {{
+#   "servings": <float>,
+#   "grams_total": <float>,
+#   "items_count": <float or null>,
+#   "household": "<string or null>",
+#   "confidence": 0.0,
+#   "assumptions": ["..."]
+# }}
+# Rules:
+# - household MUST be string or null.
+# """.strip()
+
+# def portion_prompt_image(food_name: str, ctx: Optional[str]) -> str:
+#     return f"""
+# Estimate portion size from the image for: {food_name}
+# Extra context: {ctx or ""}
+
+# Return JSON:
+# {{
+#   "servings": <float>,
+#   "grams_total": <float>,
+#   "items_count": <float or null>,
+#   "household": "<string or null>",
+#   "confidence": 0.0,
+#   "assumptions": ["..."]
+# }}
+# Rules:
+# - household MUST be string or null.
+# """.strip()
+
+# NUTRIENTS_SYSTEM = """
+# You are a nutrition analysis engine.
+# You MUST output ONLY a single valid JSON object.
+# No markdown. No backticks. No explanation. No bullet points.
+# If you cannot estimate a field, still output it with a sensible numeric value (0) or null as per schema.
+# """
+
+# def nutrients_prompt(req: NutrientsRequest) -> str:
+#     p = req.portion
+#     return f"""
+# Return ONE JSON object with EXACT keys:
+# food_name, portion, calories_kcal, macros, micros, vitamins, minerals,
+# ingredients_guess, allergens_guess, data_sources, notes.
+
+# food_name: "{req.food_name}"
+
+# portion MUST be an object with:
+# servings, grams_total, items_count, household, confidence, assumptions
+
+# For ALL nutrients, each entry MUST be:
+# {{"name":"...","amount":<float>,"unit":"g|mg|mcg|kcal","per_100g_amount":<float or null>,"daily_value_percent":<float or null>}}
+
+# ingredients_guess/allergens_guess/notes MUST be arrays.
+
+# Portion reference:
+# servings={p.servings}
+# grams_total={p.grams_total}
+# items_count={p.items_count}
+# household={p.household}
+# confidence={p.confidence}
+# assumptions={p.assumptions}
+# """.strip()
+
+# # --------------------------------------------------
+# # Normalizers
+# # --------------------------------------------------
+
+# _NUM_RE = re.compile(r"-?\d+(\.\d+)?")
+
+# def _to_float(v: Any, default: float) -> float:
+#     if v is None:
+#         return default
+#     if isinstance(v, bool):
+#         # avoid bool becoming 0/1 silently
+#         return default
+#     if isinstance(v, (int, float)):
+#         return float(v)
+#     if isinstance(v, str):
+#         m = _NUM_RE.search(v.replace(",", ""))
+#         return float(m.group(0)) if m else default
+#     return default
+
+# def _to_float_or_none(v: Any) -> float | None:
+#     if v is None:
+#         return None
+#     if isinstance(v, bool):
+#         return None
+#     if isinstance(v, (int, float)):
+#         return float(v)
+#     if isinstance(v, str):
+#         m = _NUM_RE.search(v.replace(",", ""))
+#         return float(m.group(0)) if m else None
+#     return None
+
+# def normalize_portion_obj(obj: Dict[str, Any]) -> Dict[str, Any]:
+#     obj = dict(obj or {})
+
+#     obj.setdefault("servings", 1.0)
+#     obj.setdefault("grams_total", 0.0)
+#     obj.setdefault("items_count", None)
+#     obj.setdefault("household", None)
+#     obj.setdefault("confidence", 0.6)
+#     obj.setdefault("assumptions", [])
+
+#     # household must be string or None
+#     h = obj.get("household")
+#     if h is None:
+#         obj["household"] = None
+#     elif not isinstance(h, str):
+#         obj["household"] = str(h)
+
+#     # assumptions must be list[str]
+#     a = obj.get("assumptions")
+#     if a is None:
+#         obj["assumptions"] = []
+#     elif isinstance(a, list):
+#         obj["assumptions"] = [str(x) for x in a]
+#     elif isinstance(a, str):
+#         obj["assumptions"] = [x.strip() for x in a.split(",") if x.strip()]
+#     else:
+#         obj["assumptions"] = [str(a)]
+
+#     # Coerce numerics safely (handles "40g", "about 80 grams", "2 rotis")
+#     obj["servings"] = _to_float(obj.get("servings"), 1.0)
+#     obj["grams_total"] = _to_float(obj.get("grams_total"), 0.0)
+#     obj["items_count"] = _to_float_or_none(obj.get("items_count"))
+
+#     conf = _to_float(obj.get("confidence"), 0.6)
+#     obj["confidence"] = max(0.0, min(1.0, conf))
+
+#     return obj
+
+# def _parse_amount_unit(s: str):
+#     m = re.search(r"([-+]?\d*\.?\d+)\s*([a-zA-Zµ]+)?", (s or "").strip())
+#     if not m:
+#         return 0.0, ""
+#     return float(m.group(1)), (m.group(2) or "").strip()
+
+# def _normalize_nutrient_item(name: str, v: Any) -> Dict[str, Any]:
+#     if isinstance(v, dict):
+#         v.setdefault("name", name)
+#         v.setdefault("per_100g_amount", None)
+#         v.setdefault("daily_value_percent", None)
+#         try:
+#             v["amount"] = float(v.get("amount", 0) or 0)
+#         except Exception:
+#             v["amount"] = 0.0
+#         if not isinstance(v.get("unit"), str) or not v["unit"]:
+#             v["unit"] = "g"
+#         return v
+
+#     if isinstance(v, str):
+#         amt, unit = _parse_amount_unit(v)
+#         return {
+#             "name": name,
+#             "amount": float(amt),
+#             "unit": unit or "g",
+#             "per_100g_amount": None,
+#             "daily_value_percent": None,
+#         }
+
+#     return {"name": name, "amount": 0.0, "unit": "g", "per_100g_amount": None, "daily_value_percent": None}
+
+# def normalize_nutrients_obj(obj: Dict[str, Any], req: NutrientsRequest) -> Dict[str, Any]:
+#     obj["food_name"] = obj.get("food_name") or obj.get("food") or req.food_name
+
+#     # Portion must be dict and must include confidence/assumptions
+#     if isinstance(obj.get("portion"), dict):
+#         obj["portion"] = normalize_portion_obj(obj["portion"])
+#     else:
+#         obj["portion"] = normalize_portion_obj(req.portion.model_dump())
+
+#     cal = obj.get("calories_kcal") or obj.get("calories")
+#     if isinstance(cal, str):
+#         amt, _ = _parse_amount_unit(cal)
+#         obj["calories_kcal"] = float(amt)
+#     else:
+#         try:
+#             obj["calories_kcal"] = float(cal or 0.0)
+#         except Exception:
+#             obj["calories_kcal"] = 0.0
+
+#     for section in ("macros", "micros", "vitamins", "minerals"):
+#         raw = obj.get(section)
+#         if not isinstance(raw, dict):
+#             raw = {}
+#         fixed = {}
+#         for k, v in raw.items():
+#             key = str(k).strip().lower().replace(" ", "_")
+#             fixed[key] = _normalize_nutrient_item(key, v)
+#         obj[section] = fixed
+
+#     for lf in ("ingredients_guess", "allergens_guess", "notes"):
+#         v = obj.get(lf)
+#         if isinstance(v, str):
+#             obj[lf] = [x.strip() for x in v.split(",") if x.strip()]
+#         elif isinstance(v, list):
+#             obj[lf] = [str(x) for x in v]
+#         else:
+#             obj[lf] = []
+
+#     ds = obj.get("data_sources")
+#     if isinstance(ds, str):
+#         obj["data_sources"] = [ds]
+#     elif isinstance(ds, list):
+#         obj["data_sources"] = [str(x) for x in ds]
+#     else:
+#         obj["data_sources"] = []
+
+#     return obj
+
+# async def identify_repair_if_list(raw: Any, hints: Optional[List[str]]) -> Dict[str, Any]:
+#     if isinstance(raw, list):
+#         repair_out = await gemini.generate_text(
+#             model=settings.gemini_classifier_model,
+#             system=IDENTIFY_REPAIR_SYSTEM,
+#             prompt=identify_repair_prompt(raw, hints),
+#             temperature=0.2,
+#             max_output_tokens=700,
+#         )
+#         repaired = model_json_or_400(repair_out)
+#         if not isinstance(repaired, dict):
+#             raise HTTPException(400, "Identify repair did not return a JSON object")
+#         return repaired
+
+#     if isinstance(raw, dict):
+#         return raw
+
+#     raise HTTPException(400, "Invalid identify output type")
+
+# def normalize_identify_dict(obj: Dict[str, Any]) -> IdentifyResponse:
+#     candidates = obj.get("candidates") or []
+#     chosen = obj.get("chosen")
+
+#     if isinstance(chosen, str):
+#         chosen_lower = chosen.strip().lower()
+#         match = None
+#         for c in candidates:
+#             if not isinstance(c, dict):
+#                 continue
+#             if chosen_lower in (
+#                 str(c.get("name", "")).lower(),
+#                 str(c.get("normalized_name", "")).lower()
+#             ):
+#                 match = c
+#                 break
+#         if match is None:
+#             match = {
+#                 "name": chosen,
+#                 "confidence": 0.5,
+#                 "normalized_name": chosen,
+#                 "cuisine": None,
+#                 "is_packaged": None,
+#                 "notes": "chosen string -> synthesized",
+#             }
+#             candidates.append(match)
+#         obj["chosen"] = match
+#         obj["candidates"] = candidates
+
+#     if isinstance(obj.get("chosen"), dict) and not obj.get("candidates"):
+#         obj["candidates"] = [obj["chosen"]]
+
+#     return IdentifyResponse.model_validate(obj)
+
+# # --------------------------------------------------
+# # Analyze text model
+# # --------------------------------------------------
+
+# class AnalyzeTextRequest(BaseModel):
+#     text: str
+#     hints: Optional[List[str]] = None
+#     region: str = "IN"
+#     include_per_100g: bool = True
+
+# # --------------------------------------------------
+# # PPT Generator (Sonar text → PPTX)
+# # --------------------------------------------------
+
+# IDENTIFY_ITEMS_SYSTEM = "Return ONLY valid JSON. No markdown. No extra text."
+
+# def identify_items_prompt_image(hints: Optional[List[str]]) -> str:
+#     return f"""
+# Return ONLY JSON with this schema:
+# {{
+#   "items": [
+#     {{"name": str, "normalized_name": str, "confidence": number}}
+#   ]
+# }}
+
+# Rules:
+# - items must include ALL distinct foods visible in the image
+# - items max 6
+# - confidence in [0,1]
+# Hints: {hints or []}
+# """.strip()
+
+
+# def portion_prompt_image_single(food_name: str) -> str:
+#     return f"""
+# Food: {food_name}
+
+# Return ONLY JSON:
+# {{
+#   "servings": <float>,
+#   "grams_total": <float>,
+#   "items_count": <float|null>,
+#   "household": <string|null>,
+#   "confidence": <0-1>,
+#   "assumptions": ["max 3 items"]
+# }}
+# """.strip()
+
+
+# ANALYZE_IMAGE_ITEM_SCHEMA = {
+#     "name": "AnalyzeImageItem",
+#     "schema": {
+#         "type": "object",
+#         "additionalProperties": False,
+#         "properties": {
+#             "name": {"type": "string"},
+#             "calories": {"type": "number"},
+#             "serving_size_g": {"type": "number"},
+#             "fat_total_g": {"type": "number"},
+#             "fat_saturated_g": {"type": "number"},
+#             "protein_g": {"type": "number"},
+#             "sodium_mg": {"type": "number"},
+#             "potassium_mg": {"type": "number"},
+#             "cholesterol_mg": {"type": "number"},
+#             "carbohydrates_total_g": {"type": "number"},
+#             "fiber_g": {"type": "number"},
+#             "sugar_g": {"type": "number"},
+#         },
+#         "required": [
+#             "name",
+#             "calories",
+#             "serving_size_g",
+#             "fat_total_g",
+#             "fat_saturated_g",
+#             "protein_g",
+#             "sodium_mg",
+#             "potassium_mg",
+#             "cholesterol_mg",
+#             "carbohydrates_total_g",
+#             "fiber_g",
+#             "sugar_g",
+#         ],
+#     },
+# }
+
+
+# PROMPT_TEMPLATE = """Write a presentation/powerpoint about the user's topic. You only answer with the presentation. Follow the structure of the example.
+
+# Notice:
+# - You do all the presentation text for the user.
+# - You write the texts no longer than 250 characters!
+# - You make very short titles!
+# - You make the presentation easy to understand.
+# - The presentation has a table of contents.
+# - The presentation has a summary.
+# - At least 7 slides.
+# - For each slide, after the #Content: line, add an #Image: line describing a relevant image that could visually represent the slide's topic.
+# - If no image is relevant, write #Image: none.
+
+# Example! - Stick to this formatting exactly!
+# #Title: TITLE OF THE PRESENTATION
+
+# #Slide: 1
+# #Header: table of contents
+# #Content: 1. CONTENT OF THIS POWERPOINT
+# 2. CONTENTS OF THIS POWERPOINT
+# 3. CONTENT OF THIS POWERPOINT
+# #Image: a 3D illustration of a table of contents in a book
+
+# #Slide: 2
+# #Header: TITLE OF SLIDE
+# #Content: CONTENT OF THE SLIDE
+# #Image: relevant illustration description here
+
+# #Slide: 3
+# #Header: TITLE OF SLIDE
+# #Content: CONTENT OF THE SLIDE
+# #Image: relevant illustration description here
+
+# #Slide: 4
+# #Header: TITLE OF SLIDE
+# #Content: CONTENT OF THE SLIDE
+# #Image: relevant illustration description here
+
+# #Slide: 5
+# #Header: TITLE OF SLIDE
+# #Content: CONTENT OF THE SLIDE
+# #Image: relevant illustration description here
+
+# #Slide: 6
+# #Header: TITLE OF SLIDE
+# #Content: CONTENT OF THE SLIDE
+# #Image: relevant illustration description here
+
+# #Slide: 7
+# #Header: summary
+# #Content: CONTENT OF THE SUMMARY
+# #Image: an illustration of a person reviewing a summary report
+
+# #Slide: END"""
+
+# def _local_fallback_presentation(topic: str) -> str:
+#     t = (topic or "Your Topic").title()
+#     return f"""#Title: {t}
+
+# #Slide: 1
+# #Header: table of contents
+# #Content: 1. Intro
+# 2. Why it matters
+# 3. Key points
+# 4. Examples
+# 5. Tips
+# 6. Pitfalls
+# 7. Summary
+# #Image: a 3D illustration of a table of contents in a book
+
+# #Slide: 2
+# #Header: intro
+# #Content: Brief overview of {topic}. Scope and goal.
+# #Image: relevant illustration
+
+# #Slide: 3
+# #Header: why it matters
+# #Content: Impact, use-cases, and benefits in simple terms.
+# #Image: simple infographic
+
+# #Slide: 4
+# #Header: key points
+# #Content: 3–5 core ideas about {topic}.
+# #Image: icons representing key ideas
+
+# #Slide: 5
+# #Header: examples
+# #Content: 2–3 quick examples.
+# #Image: storyboard-like illustration
+
+# #Slide: 6
+# #Header: tips & pitfalls
+# #Content: Do's and don'ts.
+# #Image: checklist illustration
+
+# #Slide: 7
+# #Header: summary
+# #Content: Short recap and next steps.
+# #Image: an illustration of a person reviewing a summary report
+
+# #Slide: END
+# """
+
+# async def generate_presentation_text_async(topic: str) -> str:
+#     # IMPORTANT: uses YOUR PerplexityClient (same service instance)
+#     system = PROMPT_TEMPLATE
+#     user = f"The user wants a presentation about {topic}"
+
+#     try:
+#         content = await pplx.chat(
+#             model=settings.pplx_sonar_model,
+#             system=system,
+#             user=user,
+#             temperature=0.35,
+#             max_tokens=1400,
+#             search_recency_filter="month",
+#         )
+#         if "#Title:" not in content or "#Slide:" not in content:
+#             return ""
+#         return content
+#     except Exception:
+#         return ""
+
+# async def create_presentation_async(text_content: str, design_number: int, presentation_name: str) -> str:
+#     template_path = DESIGNS_DIR / f"Design-{design_number}.pptx"
+#     if not template_path.exists():
+#         template_path = DESIGNS_DIR / "Design-1.pptx"
+
+#     if template_path.exists():
+#         try:
+#             prs = Presentation(str(template_path))
+#         except Exception:
+#             prs = Presentation()
+#     else:
+#         prs = Presentation()
+
+#     # Layout helpers
+#     def _safe_layout(idx: int) -> int:
+#         if len(prs.slide_layouts) == 0:
+#             return 0
+#         return max(0, min(idx, len(prs.slide_layouts) - 1))
+
+#     slide_layout_index = _safe_layout(1 if len(prs.slide_layouts) > 1 else 0)
+#     slide_placeholder_index = 1 if len(prs.slide_layouts) > 1 else 0
+
+#     slide_title = ""
+#     slide_content = ""
+#     slide_image_prompt = None
+#     slide_count = 0
+#     last_layout = -1
+#     first_time = True
+
+#     lines = [ln.rstrip("\n") for ln in text_content.splitlines()]
+#     i = 0
+
+#     async def commit_slide():
+#         nonlocal slide_title, slide_content, slide_image_prompt, slide_count
+#         if slide_count > 0 and (slide_title or slide_content):
+#             slide = prs.slides.add_slide(prs.slide_layouts[_safe_layout(slide_layout_index)])
+
+#             # title
+#             try:
+#                 slide.shapes.title.text = slide_title
+#             except Exception:
+#                 try:
+#                     slide.placeholders[0].text = slide_title
+#                 except Exception:
+#                     pass
+
+#             # body
+#             try:
+#                 body = slide.shapes.placeholders[slide_placeholder_index]
+#                 if hasattr(body, "text_frame"):
+#                     body.text_frame.text = slide_content
+#                 else:
+#                     body.text = slide_content
+#             except Exception:
+#                 pass
+
+#             # NOTE: Image generation removed for Render stability (g4f is flaky & heavy).
+#             # You can add it back later behind a feature flag.
+
+#     while i < len(lines):
+#         line = lines[i]
+
+#         if line.startswith("#Title:"):
+#             title = line.replace("#Title:", "").strip()
+#             slide = prs.slides.add_slide(prs.slide_layouts[_safe_layout(0)])
+#             try:
+#                 slide.shapes.title.text = title
+#             except Exception:
+#                 pass
+#             i += 1
+#             continue
+
+#         if line.startswith("#Slide:"):
+#             await commit_slide()
+#             slide_count += 1
+#             slide_title = ""
+#             slide_content = ""
+#             slide_image_prompt = None
+
+#             # rotate layouts a bit
+#             layouts = [1, 7, 8] if len(prs.slide_layouts) >= 9 else ([1] if len(prs.slide_layouts) > 1 else [0])
+#             if first_time:
+#                 slide_layout_index = _safe_layout(1 if len(prs.slide_layouts) > 1 else 0)
+#                 slide_placeholder_index = 1 if len(prs.slide_layouts) > 1 else 0
+#                 first_time = False
+#             else:
+#                 nxt = last_layout
+#                 tries = 0
+#                 while nxt == last_layout and tries < 10:
+#                     nxt = random.choice(layouts)
+#                     tries += 1
+#                 slide_layout_index = _safe_layout(nxt)
+#                 slide_placeholder_index = 2 if slide_layout_index == 8 else 1
+
+#             last_layout = slide_layout_index
+#             i += 1
+#             continue
+
+#         if line.startswith("#Header:"):
+#             slide_title = line.replace("#Header:", "").strip()
+#             i += 1
+#             continue
+
+#         if line.startswith("#Content:"):
+#             slide_content = line.replace("#Content:", "").strip()
+#             i += 1
+#             while i < len(lines) and not lines[i].startswith("#"):
+#                 slide_content += "\n" + lines[i]
+#                 i += 1
+#             continue
+
+#         if line.startswith("#Image:"):
+#             slide_image_prompt = line.replace("#Image:", "").strip()
+#             i += 1
+#             continue
+
+#         i += 1
+
+#     await commit_slide()
+
+#     out_path = GENERATED_DIR / f"{presentation_name}.pptx"
+#     await asyncio.to_thread(prs.save, str(out_path))
+#     return str(out_path)
+
+# # --------------------------------------------------
+# # Routes (Meta)
+# # --------------------------------------------------
+
+# @app.get("/health")
+# async def health():
+#     return {"ok": True, "env": settings.app_env}
+
+# @app.get("/v1/meta")
+# async def meta():
+#     return {
+#         "version": "1.0.0",
+#         "models": {
+#             "gemini_classifier": settings.gemini_classifier_model,
+#             "gemini_portion": settings.gemini_portion_model,
+#             "perplexity_sonar": settings.pplx_sonar_model,
+#         },
+#     }
+# async def force_json_with_gemini(schema_hint: str, text: str) -> Any:
+#     """
+#     Repairs truncated/invalid JSON (Gemini is used as a JSON "repair" tool).
+#     IMPORTANT: Must be defined BEFORE endpoints use it (fixes your NameError).
+#     """
+#     repair_system = "You repair JSON. Return ONLY valid JSON. No markdown. No extra text."
+#     repair_prompt = f"""
+# Fix the following invalid/truncated JSON into valid JSON.
+
+# Schema hint:
+# {schema_hint}
+
+# Input:
+# {text}
+
+# Return ONLY JSON. If impossible, return [] for arrays or {{}} for objects (choose appropriately).
+# """.strip()
+
+#     repaired = await gemini.generate_text(
+#         model=settings.gemini_portion_model,
+#         system=repair_system,
+#         prompt=repair_prompt,
+#         temperature=0.0,
+#         max_output_tokens=1400,
+#     )
+#     return model_json_or_400(repaired)
+# # --------------------------------------------------
+# # Food Routes (identify / portion / nutrients / analyze)
+# # --------------------------------------------------
+
+# @app.post("/v1/food/identify", response_model=IdentifyResponse)
+# async def identify_food(req: IdentifyRequest):
+#     if req.mode != "text":
+#         raise HTTPException(422, "Use /v1/food/identify-image for images")
+#     if not req.text:
+#         raise HTTPException(422, "text is required")
+
+#     out = await gemini.generate_text(
+#         model=settings.gemini_classifier_model,
+#         system=IDENTIFY_SYSTEM,
+#         prompt=identify_user_prompt_text(req.text, req.hints),
+#         temperature=0.2,
+#         max_output_tokens=900,
+#     )
+#     raw = model_json_or_400(out)
+#     raw = await identify_repair_if_list(raw, req.hints)
+#     return normalize_identify_dict(raw)
+
+# @app.post("/v1/food/identify-image", response_model=IdentifyResponse)
+# async def identify_food_image(file: UploadFile = File(...), hints: Optional[str] = None):
+#     image_bytes = await file.read()
+#     if not image_bytes:
+#         raise HTTPException(400, "Uploaded image is empty")
+
+#     hints_list = [h.strip() for h in (hints or "").split(",") if h.strip()] or None
+
+#     out = await gemini.generate_with_image(
+#         model=settings.gemini_classifier_model,
+#         system=IDENTIFY_SYSTEM,
+#         prompt=identify_user_prompt_image(hints_list),
+#         image_bytes=image_bytes,
+#         mime_type=file.content_type or "image/jpeg",
+#         temperature=0.2,
+#         max_output_tokens=900,
+#     )
+#     raw = model_json_or_400(out)
+#     raw = await identify_repair_if_list(raw, hints_list)
+#     return normalize_identify_dict(raw)
+
+# @app.post("/v1/food/portion", response_model=PortionResponse)
+# async def estimate_portion(req: PortionRequest):
+#     if req.mode != "text":
+#         raise HTTPException(422, "Use /v1/food/portion-image for images")
+
+#     out = await gemini.generate_text(
+#         model=settings.gemini_portion_model,
+#         system=PORTION_SYSTEM,
+#         prompt=portion_prompt_text(req.food_name, req.assumed_servings, req.household_measure, req.text_context),
+#         temperature=0.2,
+#         max_output_tokens=900,
+#     )
+#     raw = model_json_or_400(out)
+#     if not isinstance(raw, dict):
+#         raise HTTPException(400, "Portion model returned invalid JSON")
+#     raw = normalize_portion_obj(raw)
+#     portion = PortionEstimate.model_validate(raw)
+#     return PortionResponse(food_name=req.food_name, portion=portion)
+
+# @app.post("/v1/food/portion-image", response_model=PortionResponse)
+# async def estimate_portion_image(
+#     food_name: str = Query(...),
+#     file: UploadFile = File(...),
+#     text_context: Optional[str] = None,
+# ):
+#     image_bytes = await file.read()
+#     if not image_bytes:
+#         raise HTTPException(400, "Uploaded image is empty")
+
+#     out = await gemini.generate_with_image(
+#         model=settings.gemini_portion_model,
+#         system=PORTION_SYSTEM,
+#         prompt=portion_prompt_image(food_name, ctx=text_context),
+#         image_bytes=image_bytes,
+#         mime_type=file.content_type or "image/jpeg",
+#         temperature=0.2,
+#         max_output_tokens=900,
+#     )
+#     raw = model_json_or_400(out)
+#     if not isinstance(raw, dict):
+#         raise HTTPException(400, "Portion model returned invalid JSON")
+#     raw = normalize_portion_obj(raw)
+#     portion = PortionEstimate.model_validate(raw)
+#     return PortionResponse(food_name=food_name, portion=portion)
+
+# @app.post("/v1/food/nutrients", response_model=NutrientsResponse)
+# async def nutrients(req: NutrientsRequest):
+#     out = await pplx.chat(
+#         model=settings.pplx_sonar_model,
+#         system=NUTRIENTS_SYSTEM,
+#         user=nutrients_prompt(req),
+#         temperature=0.2,
+#         max_tokens=1800,
+#         search_recency_filter="month",
+#     )
+#     raw = model_json_or_400(out)
+#     if not isinstance(raw, dict):
+#         raise HTTPException(400, "Nutrients model returned invalid JSON")
+
+#     raw = normalize_nutrients_obj(raw, req)
+
+#     if not req.include_per_100g:
+#         for section in ("macros", "micros", "vitamins", "minerals"):
+#             for _, item in raw.get(section, {}).items():
+#                 if isinstance(item, dict):
+#                     item["per_100g_amount"] = None
+
+#     return NutrientsResponse.model_validate(raw)
+
+# class AnalyzeTextRequest(BaseModel):
+#     text: str
+#     hints: Optional[List[str]] = None
+#     region: str = "IN"
+#     include_per_100g: bool = True
+
+# @app.post("/v1/food/analyze", response_model=AnalyzeResponse)
+# async def analyze_text(req: AnalyzeTextRequest):
+#     # identify
+#     identify_out = await gemini.generate_text(
+#         model=settings.gemini_classifier_model,
+#         system=IDENTIFY_SYSTEM,
+#         prompt=identify_user_prompt_text(req.text, req.hints),
+#         temperature=0.2,
+#         max_output_tokens=900,
+#     )
+#     raw_ident = model_json_or_400(identify_out)
+#     raw_ident = await identify_repair_if_list(raw_ident, req.hints)
+#     identify = normalize_identify_dict(raw_ident)
+#     food_name = identify.chosen.normalized_name or identify.chosen.name
+
+#     # portion
+#     portion_out = await gemini.generate_text(
+#         model=settings.gemini_portion_model,
+#         system=PORTION_SYSTEM,
+#         prompt=portion_prompt_text(food_name, 1.0, None, req.text),
+#         temperature=0.2,
+#         max_output_tokens=900,
+#     )
+#     raw_portion = model_json_or_400(portion_out)
+#     if not isinstance(raw_portion, dict):
+#         raise HTTPException(400, "Portion model returned invalid JSON")
+#     raw_portion = normalize_portion_obj(raw_portion)
+#     portion = PortionEstimate.model_validate(raw_portion)
+
+#     # nutrients
+#     nreq = NutrientsRequest(food_name=food_name, portion=portion, region=req.region, include_per_100g=req.include_per_100g)
+#     nutrients_res = await nutrients(nreq)
+
+#     return AnalyzeResponse(
+#         identify=identify,
+#         portion=PortionResponse(food_name=food_name, portion=portion),
+#         nutrients=nutrients_res,
+#         cost_tier={"identify": "$", "portion": "$$", "nutrients": "$$$$"},
+#     )
+
+# PPLX_MACROS_SYSTEM = (
+#     "You are a nutrition estimator. Return ONLY JSON. "
+#     "No citations, no links, no search_results, no extra keys."
+# )
+
+# def pplx_macros_prompt(name: str, serving_g: float, region: str) -> str:
+#     return f"""
+# Return ONLY JSON matching schema AnalyzeImageItem.
+
+# Food name: {name}
+# Region: {region}
+# Serving size (grams): {serving_g}
+
+# Rules:
+# - Numbers only (no strings for numeric fields)
+# - If unknown, return 0 for that field (not null)
+# """.strip()
+
+
+
+# @app.post("/v1/food/analyze-image", response_model=List[AnalyzeImageItem])
+# async def analyze_image(
+#     file: UploadFile = File(...),
+#     hints: Optional[str] = None,
+#     region: str = "IN",
+#     include_per_100g: bool = True,  # kept for compatibility; not used in this slim response
+# ):
+#     image_bytes = await file.read()
+#     if not image_bytes:
+#         raise HTTPException(400, "Uploaded image is empty")
+
+#     hints_list = [h.strip() for h in (hints or "").split(",") if h.strip()] or None
+
+#     # 1) Identify multiple foods
+#     identify_out = await gemini.generate_with_image(
+#         model=settings.gemini_classifier_model,
+#         system=IDENTIFY_ITEMS_SYSTEM,
+#         prompt=identify_items_prompt_image(hints_list),
+#         image_bytes=image_bytes,
+#         mime_type=file.content_type or "image/jpeg",
+#         temperature=0.2,
+#         max_output_tokens=600,
+#     )
+
+#     raw_ident = model_json_or_400(identify_out)
+#     if not isinstance(raw_ident, dict) or not isinstance(raw_ident.get("items"), list):
+#         # repair identify JSON if needed
+#         raw_ident = await force_json_with_gemini('{"items":[{"name":str,"normalized_name":str,"confidence":number}]}', identify_out)
+
+#     items = raw_ident.get("items") or []
+#     clean_items = []
+#     for it in items:
+#         if not isinstance(it, dict):
+#             continue
+#         nm = (it.get("normalized_name") or it.get("name") or "").strip()
+#         if nm:
+#             clean_items.append(nm)
+
+#     # de-dupe, keep order, cap
+#     seen = set()
+#     foods: List[str] = []
+#     for nm in clean_items:
+#         key = nm.lower()
+#         if key not in seen:
+#             seen.add(key)
+#             foods.append(nm)
+#     foods = foods[:6]
+
+#     if not foods:
+#         raise HTTPException(400, "No foods detected in image")
+
+#     results: List[AnalyzeImageItem] = []
+
+#     # 2) For each food: estimate portion grams with Gemini, then fetch macro nutrients via Perplexity JSON schema
+#     for food_name in foods:
+#         # Portion estimate
+#         portion_out = await gemini.generate_with_image(
+#             model=settings.gemini_portion_model,
+#             system=PORTION_SYSTEM,
+#             prompt=portion_prompt_image_single(food_name),
+#             image_bytes=image_bytes,
+#             mime_type=file.content_type or "image/jpeg",
+#             temperature=0.2,
+#             max_output_tokens=450,
+#         )
+
+#         try:
+#             raw_portion = model_json_or_400(portion_out)
+#         except HTTPException:
+#             raw_portion = await force_json_with_gemini(
+#                 '{"servings":number,"grams_total":number,"items_count":number|null,"household":string|null,"confidence":number,"assumptions":string[]}',
+#                 portion_out,
+#             )
+
+#         raw_portion = normalize_portion_obj(raw_portion)
+#         try:
+#             portion = PortionEstimate.model_validate(raw_portion)
+#         except Exception:
+#             portion = PortionEstimate(
+#                 servings=1.0,
+#                 grams_total=100.0,
+#                 items_count=None,
+#                 household="1 serving (default 100g)",
+#                 confidence=0.3,
+#                 assumptions=["Defaulted to 100g because portion parse failed"],
+#             )
+
+#         serving_g = float(portion.grams_total or 0.0)
+#         if serving_g <= 0:
+#             serving_g = 100.0
+
+#         # Perplexity macro nutrients (JSON schema mode to stop invalid JSON)
+#         try:
+#             pplx_out = await pplx.chat_json_schema(
+#                 model=settings.pplx_sonar_model,
+#                 system=PPLX_MACROS_SYSTEM,
+#                 user=pplx_macros_prompt(food_name, serving_g, region),
+#                 json_schema=ANALYZE_IMAGE_ITEM_SCHEMA,
+#                 temperature=0.0,
+#                 max_tokens=500,
+#             )
+#             obj = model_json_or_400(pplx_out)
+#             if not isinstance(obj, dict):
+#                 raise ValueError("Perplexity returned non-object")
+#         except Exception as e:
+#             # final fallback: produce a minimal object so endpoint never crashes
+#             obj = {
+#                 "name": food_name,
+#                 "calories": 0.0,
+#                 "serving_size_g": serving_g,
+#                 "fat_total_g": 0.0,
+#                 "fat_saturated_g": 0.0,
+#                 "protein_g": 0.0,
+#                 "sodium_mg": 0.0,
+#                 "potassium_mg": 0.0,
+#                 "cholesterol_mg": 0.0,
+#                 "carbohydrates_total_g": 0.0,
+#                 "fiber_g": 0.0,
+#                 "sugar_g": 0.0,
+#             }
+
+#         # enforce name + serving size from our pipeline (source of truth)
+#         obj["name"] = food_name
+#         obj["serving_size_g"] = serving_g
+
+#         results.append(AnalyzeImageItem.model_validate(obj))
+
+#     return results
+
+# # --------------------------------------------------
+# # PPT Routes (single instance)
+# # --------------------------------------------------
+
+# @app.post("/v1/ppt/generate", response_model=PPTGenerateResponse)
+# async def generate_ppt(req: PPTGenerateRequest):
+#     topic = (req.topic or "").strip()
+#     if not topic:
+#         raise HTTPException(422, "topic is required")
+
+#     design_number = req.design_number
+#     if design_number < 1 or design_number > 7:
+#         design_number = 1
+
+#     safe_topic = re.sub(r"[^\w\s\.\-\(\)]", "", topic).replace("\n", "").strip()
+#     filename = f"{safe_topic[:40]}_{uuid.uuid4().hex}"
+
+#     deck_text = await generate_presentation_text_async(safe_topic)
+#     fallback_used = False
+#     if not deck_text:
+#         deck_text = _local_fallback_presentation(safe_topic)
+#         fallback_used = True
+
+#     ppt_path = await create_presentation_async(deck_text, design_number, filename)
+
+#     base_url = (settings.public_base_url or "").rstrip("/")
+#     if not base_url:
+#         # Render provides your onrender URL; easiest is to set PUBLIC_BASE_URL env var in Render
+#         # Example: https://your-service.onrender.com
+#         base_url = "https://ppt-generator-mtu0.onrender.com"
+
+#     download_url = f"{base_url}/v1/ppt/download/{Path(ppt_path).name}"
+
+#     return PPTGenerateResponse(
+#         status="success",
+#         filename=Path(ppt_path).name,
+#         # download_url=download_url,
+#         fallback_used=fallback_used,
+#     )
+
+# @app.get("/v1/ppt/download/{filename}")
+# async def download_ppt(filename: str):
+#     file_path = GENERATED_DIR / filename
+#     if not file_path.is_file():
+#         raise HTTPException(404, "File not found")
+#     return FileResponse(
+#         file_path,
+#         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+#         filename=filename,
+#     )
+# app/main.py
 from __future__ import annotations
+
 import os
 import re
 import uuid
 import random
 import asyncio
-from io import BytesIO
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Union
-from typing import Any, Dict, List, Optional
-import requests
-from pptx import Presentation
-from pptx.util import Inches
+from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import ORJSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
-from fastapi.responses import ORJSONResponse
-from pydantic import BaseModel
+
+from pptx import Presentation
 
 from app.config import settings
 from app.models import (
     IdentifyRequest, IdentifyResponse,
     PortionRequest, PortionResponse, PortionEstimate,
-    NutrientsRequest, NutrientsResponse,
-    AnalyzeTextRequest, AnalyzeResponse, PPTGenerateRequest, PPTGenerateResponse
+    NutrientsRequest,
+    PPTGenerateRequest, PPTGenerateResponse,
+    AnalyzeImageNutritionItem,
 )
 from app.clients.gemini import GeminiClient
 from app.clients.perplexity import PerplexityClient
 from app.utils import extract_json_object, ModelJSONError
 
+
+# -----------------------------------------------------------------------------
+# App
+# -----------------------------------------------------------------------------
 app = FastAPI(
-    title="Food Nutrients API",
+    title="Dashovia API (Food + PPT)",
     version="1.0.0",
     default_response_class=ORJSONResponse,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # tighten for prod
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 gemini = GeminiClient(api_key=settings.gemini_api_key)
 pplx = PerplexityClient(api_key=settings.pplx_api_key)
 
 GENERATED_DIR = Path(os.getenv("GENERATED_DIR", "GeneratedPresentations"))
-CACHE_DIR = Path(os.getenv("CACHE_DIR", "Cache"))
 DESIGNS_DIR = Path(os.getenv("DESIGNS_DIR", "Designs"))
-
 GENERATED_DIR.mkdir(exist_ok=True)
-CACHE_DIR.mkdir(exist_ok=True)
 DESIGNS_DIR.mkdir(exist_ok=True)
 
 
-# ---------------- Global JSON error handler (prevents jq explosions) ----------------
-
+# -----------------------------------------------------------------------------
+# Global JSON error handler (prevents jq explosions)
+# -----------------------------------------------------------------------------
 @app.exception_handler(Exception)
 async def all_exception_handler(request: Request, exc: Exception):
-    # Always return JSON so jq never breaks
     return ORJSONResponse(
         status_code=500,
         content={"error": "internal_error", "message": str(exc)[:2000]},
     )
 
-# ---------------- Prompts ----------------
 
+# -----------------------------------------------------------------------------
+# Prompts (Food)
+# -----------------------------------------------------------------------------
 IDENTIFY_SYSTEM = "Return ONLY valid JSON. No markdown. No extra text."
 PORTION_SYSTEM = "Return ONLY valid JSON. No markdown. No extra text."
 NUTRIENTS_SYSTEM = (
     "Return ONLY valid JSON (no markdown, no commentary). "
     "Do NOT include citations, search_results, links, or extra fields."
 )
+
+# NEW: image multi-food detection + grams
+IMAGE_FOODS_SYSTEM = "Return ONLY valid JSON array. No markdown. No extra text."
+
 
 def identify_user_prompt_text(text: str, hints: Optional[List[str]]) -> str:
     return f"""
@@ -77,22 +1262,10 @@ Return JSON:
 User text: {text}
 Hints: {hints or []}
 Rules:
-- candidates max 3
+- candidates max 5
 - chosen MUST be an object (not string)
 """.strip()
 
-def identify_user_prompt_image(hints: Optional[List[str]]) -> str:
-    return f"""
-Return JSON:
-{{
-  "candidates":[{{"name":str,"confidence":0-1,"normalized_name":str,"cuisine":str|null,"is_packaged":bool|null,"notes":str|null}}],
-  "chosen": {{"name":str,"confidence":0-1,"normalized_name":str,"cuisine":str|null,"is_packaged":bool|null,"notes":str|null}}
-}}
-Hints: {hints or []}
-Rules:
-- candidates max 3
-- chosen MUST be an object (not string)
-""".strip()
 
 def portion_prompt_text(food_name: str, ctx: Optional[str]) -> str:
     return f"""
@@ -110,31 +1283,15 @@ Return ONLY JSON:
 }}
 """.strip()
 
-def portion_prompt_image(food_name: str, ctx: Optional[str]) -> str:
-    return f"""
-Food: {food_name}
-Context: {ctx or ""}
-
-Return ONLY JSON:
-{{
-  "servings": <float>,
-  "grams_total": <float>,
-  "items_count": <float|null>,
-  "household": <string|null>,
-  "confidence": <0-1>,
-  "assumptions": ["max 3 items, each under 80 chars"]
-}}
-""".strip()
 
 def nutrients_prompt(req: NutrientsRequest) -> str:
     p = req.portion
     return f"""
-Return ONLY JSON with this exact schema keys:
+Return ONLY JSON with keys:
 food_name, portion, calories_kcal, macros, micros, vitamins, minerals, ingredients_guess, allergens_guess, data_sources, notes
 
 Food: {req.food_name}
 Region: {req.region}
-Brand: {req.brand or ""}
 
 Portion:
 servings={p.servings}
@@ -143,67 +1300,350 @@ items_count={p.items_count}
 household={p.household}
 
 Rules:
-- Use units g, mg, kcal
-- macros/micros/vitamins/minerals values MUST be objects with:
-  {{name, amount, unit, per_100g_amount, daily_value_percent}}
-- ingredients_guess/allergens_guess/notes/data_sources MUST be arrays (lists)
 - No citations, no links, no search_results.
 """.strip()
 
+
+# -----------------------------------------------------------------------------
+# JSON helpers
+# -----------------------------------------------------------------------------
+def model_json_or_400(text: str) -> Any:
+    try:
+        return extract_json_object(text)
+    except ModelJSONError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+async def force_json_with_gemini(schema_hint: str, text: str) -> Any:
+    """
+    Repairs truncated/invalid JSON (Gemini is used as a JSON "repair" tool).
+    IMPORTANT: Must be defined BEFORE endpoints use it (fixes your NameError).
+    """
+    repair_system = "You repair JSON. Return ONLY valid JSON. No markdown. No extra text."
+    repair_prompt = f"""
+Fix the following invalid/truncated JSON into valid JSON.
+
+Schema hint:
+{schema_hint}
+
+Input:
+{text}
+
+Return ONLY JSON. If impossible, return [] for arrays or {{}} for objects (choose appropriately).
+""".strip()
+
+    repaired = await gemini.generate_text(
+        model=settings.gemini_portion_model,
+        system=repair_system,
+        prompt=repair_prompt,
+        temperature=0.0,
+        max_output_tokens=1400,
+    )
+    return model_json_or_400(repaired)
+
+
+# -----------------------------------------------------------------------------
+# Normalizers (keep minimal)
+# -----------------------------------------------------------------------------
+def normalize_portion_obj(obj: Any) -> Dict[str, Any]:
+    if not isinstance(obj, dict):
+        obj = {}
+
+    obj.setdefault("servings", 1.0)
+    obj.setdefault("grams_total", 0.0)
+    obj.setdefault("items_count", None)
+    obj.setdefault("household", None)
+    obj.setdefault("confidence", 0.6)
+    obj.setdefault("assumptions", [])
+
+    h = obj.get("household")
+    if h is not None and not isinstance(h, str):
+        obj["household"] = str(h)
+
+    if not isinstance(obj.get("assumptions"), list):
+        obj["assumptions"] = [str(obj.get("assumptions"))]
+
+    try:
+        obj["servings"] = float(obj.get("servings") or 1.0)
+    except Exception:
+        obj["servings"] = 1.0
+
+    try:
+        obj["grams_total"] = float(obj.get("grams_total") or 0.0)
+    except Exception:
+        obj["grams_total"] = 0.0
+
+    ic = obj.get("items_count")
+    if ic is None:
+        obj["items_count"] = None
+    else:
+        try:
+            obj["items_count"] = float(ic)
+        except Exception:
+            obj["items_count"] = None
+
+    try:
+        obj["confidence"] = float(obj.get("confidence") or 0.6)
+    except Exception:
+        obj["confidence"] = 0.6
+
+    obj["confidence"] = max(0.0, min(1.0, obj["confidence"]))
+    return obj
+
+
+# -----------------------------------------------------------------------------
+# Health/meta
+# -----------------------------------------------------------------------------
+@app.get("/health")
+async def health():
+    return {"ok": True, "env": settings.app_env}
+
+
+@app.get("/v1/meta")
+async def meta():
+    return {
+        "version": "1.0.0",
+        "models": {
+            "gemini_classifier": settings.gemini_classifier_model,
+            "gemini_portion": settings.gemini_portion_model,
+            "perplexity_sonar": settings.pplx_sonar_model,
+        },
+    }
+
+
+# -----------------------------------------------------------------------------
+# Food: existing endpoints (you can keep yours; shortened here)
+# -----------------------------------------------------------------------------
+@app.post("/v1/food/identify", response_model=IdentifyResponse)
+async def identify_food(req: IdentifyRequest):
+    if req.mode != "text" or not req.text:
+        raise HTTPException(status_code=422, detail="Use mode=text with text.")
+    out = await gemini.generate_text(
+        model=settings.gemini_classifier_model,
+        system=IDENTIFY_SYSTEM,
+        prompt=identify_user_prompt_text(req.text, req.hints),
+        temperature=0.2,
+        max_output_tokens=800,
+    )
+    raw = model_json_or_400(out)
+    # Use your existing IdentifyResponse schema normalization if you want;
+    # Here we assume model already matches IdentifyResponse.
+    return IdentifyResponse.model_validate(raw)
+
+
+@app.post("/v1/food/portion", response_model=PortionResponse)
+async def portion_text(req: PortionRequest):
+    if req.mode != "text":
+        raise HTTPException(status_code=422, detail="Use mode=text.")
+
+    out = await gemini.generate_text(
+        model=settings.gemini_portion_model,
+        system=PORTION_SYSTEM,
+        prompt=portion_prompt_text(req.food_name, req.text_context),
+        temperature=0.2,
+        max_output_tokens=700,
+    )
+
+    try:
+        raw = model_json_or_400(out)
+    except HTTPException:
+        raw = await force_json_with_gemini(
+            "PortionEstimate object",
+            out,
+        )
+
+    raw = normalize_portion_obj(raw)
+    est = PortionEstimate.model_validate(raw)
+
+    if est.grams_total <= 0:
+        est = PortionEstimate(
+            servings=1.0,
+            grams_total=100.0,
+            items_count=None,
+            household=req.household_measure or "1 serving (default 100g)",
+            confidence=0.3,
+            assumptions=["Defaulted to 100g because model output was uncertain"],
+        )
+
+    return PortionResponse(food_name=req.food_name, portion=est)
+
+
+# -----------------------------------------------------------------------------
+# NEW: Analyze Image (returns LIST exactly like you want)
+# -----------------------------------------------------------------------------
+def image_foods_prompt(hints: Optional[List[str]]) -> str:
+    return f"""
+Return ONLY a JSON array. Each item is:
+{{
+  "name": "string",
+  "serving_size_g": number
+}}
+
+Rules:
+- Detect MULTIPLE foods if present.
+- serving_size_g must be a reasonable estimate from the image (use typical serving sizes if unsure).
+- Keep 1 to 6 items maximum.
+- No extra keys. No markdown.
+
+Hints: {hints or []}
+""".strip()
+
+
+def pplx_nutrition_schema() -> Dict[str, Any]:
+    """
+    JSON schema for the exact list output you want.
+    """
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "AnalyzeImageNutritionList",
+            "schema": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "name",
+                        "calories",
+                        "serving_size_g",
+                        "fat_total_g",
+                        "fat_saturated_g",
+                        "protein_g",
+                        "sodium_mg",
+                        "potassium_mg",
+                        "cholesterol_mg",
+                        "carbohydrates_total_g",
+                        "fiber_g",
+                        "sugar_g",
+                    ],
+                    "properties": {
+                        "name": {"type": "string"},
+                        "calories": {"type": "number"},
+                        "serving_size_g": {"type": "number"},
+                        "fat_total_g": {"type": "number"},
+                        "fat_saturated_g": {"type": "number"},
+                        "protein_g": {"type": "number"},
+                        "sodium_mg": {"type": "number"},
+                        "potassium_mg": {"type": "number"},
+                        "cholesterol_mg": {"type": "number"},
+                        "carbohydrates_total_g": {"type": "number"},
+                        "fiber_g": {"type": "number"},
+                        "sugar_g": {"type": "number"},
+                    },
+                },
+            },
+        },
+    }
+
+
+def pplx_nutrition_prompt(region: str, foods: List[Dict[str, Any]]) -> str:
+    return f"""
+You are a nutrition calculator.
+
+Return ONLY JSON array matching the schema (no commentary).
+
+Region: {region}
+
+Foods (name + serving_size_g):
+{foods}
+
+Compute nutrition totals for each item for its serving_size_g.
+If uncertain, use standard nutritional averages for that region.
+""".strip()
+
+
+@app.post("/v1/food/analyze-image", response_model=List[AnalyzeImageNutritionItem])
+async def analyze_image(
+    file: UploadFile = File(...),
+    hints: Optional[str] = None,
+    region: str = "IN",
+):
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(422, "Uploaded image is empty")
+
+    hints_list = [h.strip() for h in (hints or "").split(",") if h.strip()] or None
+
+    # Step 1: Gemini detects multiple foods + grams
+    foods_out = await gemini.generate_with_image(
+        model=settings.gemini_classifier_model,
+        system=IMAGE_FOODS_SYSTEM,
+        prompt=image_foods_prompt(hints_list),
+        image_bytes=image_bytes,
+        mime_type=file.content_type or "image/jpeg",
+        temperature=0.2,
+        max_output_tokens=900,
+    )
+
+    try:
+        foods_raw = model_json_or_400(foods_out)
+        if not isinstance(foods_raw, list):
+            raise HTTPException(400, "Food detection output not a JSON array.")
+    except HTTPException:
+        foods_raw = await force_json_with_gemini("Array[{name, serving_size_g}]", foods_out)
+        if not isinstance(foods_raw, list):
+            raise HTTPException(400, "Could not repair foods list JSON.")
+
+    # sanitize foods
+    foods: List[Dict[str, Any]] = []
+    for it in foods_raw[:6]:
+        if not isinstance(it, dict):
+            continue
+        name = str(it.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            grams = float(it.get("serving_size_g") or 0.0)
+        except Exception:
+            grams = 0.0
+        if grams <= 0:
+            grams = 100.0
+        foods.append({"name": name, "serving_size_g": grams})
+
+    if not foods:
+        raise HTTPException(400, "No foods detected in image.")
+
+    # Step 2: Perplexity computes nutrition with strict json_schema response
+    pplx_system = "Return ONLY JSON. No markdown. No extra text."
+    pplx_user = pplx_nutrition_prompt(region=region, foods=foods)
+
+    try:
+        nut_out = await pplx.chat(
+            model=settings.pplx_sonar_model,
+            system=pplx_system,
+            user=pplx_user,
+            temperature=0.1,
+            max_tokens=900,
+            # IMPORTANT: strict schema (fixes your truncated/invalid JSON issues)
+            response_format=pplx_nutrition_schema(),
+            # IMPORTANT: disable web extras
+            return_images=False,
+            return_related_questions=False,
+        )
+    except Exception as e:
+        raise HTTPException(400, f"Perplexity error: {str(e)[:300]}")
+
+    # parse JSON array
+    try:
+        nut_raw = model_json_or_400(nut_out)
+        if not isinstance(nut_raw, list):
+            raise HTTPException(400, "Nutrition output not a JSON array.")
+    except HTTPException:
+        nut_raw = await force_json_with_gemini("AnalyzeImageNutritionItem[]", nut_out)
+        if not isinstance(nut_raw, list):
+            raise HTTPException(400, "Could not repair nutrition JSON.")
+
+    # validate to your response model
+    return [AnalyzeImageNutritionItem.model_validate(x) for x in nut_raw]
+
+
+# -----------------------------------------------------------------------------
+# PPT endpoints (kept)
+# -----------------------------------------------------------------------------
 PROMPT_TEMPLATE = """Write a presentation/powerpoint about the user's topic. You only answer with the presentation. Follow the structure of the example.
-
-Notice:
-- You do all the presentation text for the user.
-- You write the texts no longer than 250 characters!
-- You make very short titles!
-- You make the presentation easy to understand.
-- The presentation has a table of contents.
-- The presentation has a summary.
-- At least 7 slides.
-- For each slide, after the #Content: line, add an #Image: line describing a relevant image that could visually represent the slide's topic.
-- If no image is relevant, write #Image: none.
-
-Example! - Stick to this formatting exactly!
-#Title: TITLE OF THE PRESENTATION
-
-#Slide: 1
-#Header: table of contents
-#Content: 1. CONTENT OF THIS POWERPOINT
-2. CONTENTS OF THIS POWERPOINT
-3. CONTENT OF THIS POWERPOINT
-#Image: a 3D illustration of a table of contents in a book
-
-#Slide: 2
-#Header: TITLE OF SLIDE
-#Content: CONTENT OF THE SLIDE
-#Image: relevant illustration description here
-
-#Slide: 3
-#Header: TITLE OF SLIDE
-#Content: CONTENT OF THE SLIDE
-#Image: relevant illustration description here
-
-#Slide: 4
-#Header: TITLE OF SLIDE
-#Content: CONTENT OF THE SLIDE
-#Image: relevant illustration description here
-
-#Slide: 5
-#Header: TITLE OF SLIDE
-#Content: CONTENT OF THE SLIDE
-#Image: relevant illustration description here
-
-#Slide: 6
-#Header: TITLE OF SLIDE
-#Content: CONTENT OF THE SLIDE
-#Image: relevant illustration description here
-
-#Slide: 7
-#Header: summary
-#Content: CONTENT OF THE SUMMARY
-#Image: an illustration of a person reviewing a summary report
-
+... (same as your template) ...
 #Slide: END"""
+
 
 def _local_fallback_presentation(topic: str) -> str:
     t = (topic or "Your Topic").title()
@@ -218,54 +1658,54 @@ def _local_fallback_presentation(topic: str) -> str:
 5. Tips
 6. Pitfalls
 7. Summary
-#Image: a 3D illustration of a table of contents in a book
+#Image: none
 
 #Slide: 2
 #Header: intro
-#Content: Brief overview of {topic}. Scope and goal.
-#Image: relevant illustration
+#Content: Brief overview of {topic}.
+#Image: none
 
 #Slide: 3
 #Header: why it matters
-#Content: Impact, use-cases, and benefits in simple terms.
-#Image: simple infographic
+#Content: Impact + benefits.
+#Image: none
 
 #Slide: 4
 #Header: key points
-#Content: 3–5 core ideas about {topic}.
-#Image: icons representing key ideas
+#Content: 3–5 core ideas.
+#Image: none
 
 #Slide: 5
 #Header: examples
 #Content: 2–3 quick examples.
-#Image: storyboard-like illustration
+#Image: none
 
 #Slide: 6
 #Header: tips & pitfalls
 #Content: Do's and don'ts.
-#Image: checklist illustration
+#Image: none
 
 #Slide: 7
 #Header: summary
 #Content: Short recap and next steps.
-#Image: an illustration of a person reviewing a summary report
+#Image: none
 
 #Slide: END
 """
 
+
 async def generate_presentation_text_async(topic: str) -> str:
-    # IMPORTANT: uses YOUR PerplexityClient (same service instance)
     system = PROMPT_TEMPLATE
     user = f"The user wants a presentation about {topic}"
-
     try:
+        # NOTE: no search_recency_filter unless YOU want it; keep payload minimal
         content = await pplx.chat(
             model=settings.pplx_sonar_model,
             system=system,
             user=user,
             temperature=0.35,
             max_tokens=1400,
-            search_recency_filter="month",
+            response_format={"type": "text"},  # explicit & valid
         )
         if "#Title:" not in content or "#Slide:" not in content:
             return ""
@@ -273,73 +1713,51 @@ async def generate_presentation_text_async(topic: str) -> str:
     except Exception:
         return ""
 
+
 async def create_presentation_async(text_content: str, design_number: int, presentation_name: str) -> str:
     template_path = DESIGNS_DIR / f"Design-{design_number}.pptx"
     if not template_path.exists():
         template_path = DESIGNS_DIR / "Design-1.pptx"
 
-    if template_path.exists():
-        try:
-            prs = Presentation(str(template_path))
-        except Exception:
-            prs = Presentation()
-    else:
-        prs = Presentation()
+    prs = Presentation(str(template_path)) if template_path.exists() else Presentation()
 
-    # Layout helpers
-    def _safe_layout(idx: int) -> int:
-        if len(prs.slide_layouts) == 0:
+    def safe_layout(idx: int) -> int:
+        if not prs.slide_layouts:
             return 0
         return max(0, min(idx, len(prs.slide_layouts) - 1))
 
-    slide_layout_index = _safe_layout(1 if len(prs.slide_layouts) > 1 else 0)
-    slide_placeholder_index = 1 if len(prs.slide_layouts) > 1 else 0
+    slide_layout_index = safe_layout(1 if len(prs.slide_layouts) > 1 else 0)
+    placeholder_idx = 1 if len(prs.slide_layouts) > 1 else 0
 
     slide_title = ""
     slide_content = ""
-    slide_image_prompt = None
     slide_count = 0
     last_layout = -1
-    first_time = True
 
     lines = [ln.rstrip("\n") for ln in text_content.splitlines()]
     i = 0
 
     async def commit_slide():
-        nonlocal slide_title, slide_content, slide_image_prompt, slide_count
+        nonlocal slide_title, slide_content, slide_count
         if slide_count > 0 and (slide_title or slide_content):
-            slide = prs.slides.add_slide(prs.slide_layouts[_safe_layout(slide_layout_index)])
-
-            # title
+            s = prs.slides.add_slide(prs.slide_layouts[safe_layout(slide_layout_index)])
             try:
-                slide.shapes.title.text = slide_title
+                s.shapes.title.text = slide_title
             except Exception:
-                try:
-                    slide.placeholders[0].text = slide_title
-                except Exception:
-                    pass
-
-            # body
+                pass
             try:
-                body = slide.shapes.placeholders[slide_placeholder_index]
-                if hasattr(body, "text_frame"):
-                    body.text_frame.text = slide_content
-                else:
-                    body.text = slide_content
+                body = s.shapes.placeholders[placeholder_idx]
+                body.text_frame.text = slide_content
             except Exception:
                 pass
 
-            # NOTE: Image generation removed for Render stability (g4f is flaky & heavy).
-            # You can add it back later behind a feature flag.
-
     while i < len(lines):
         line = lines[i]
-
         if line.startswith("#Title:"):
             title = line.replace("#Title:", "").strip()
-            slide = prs.slides.add_slide(prs.slide_layouts[_safe_layout(0)])
+            s = prs.slides.add_slide(prs.slide_layouts[safe_layout(0)])
             try:
-                slide.shapes.title.text = title
+                s.shapes.title.text = title
             except Exception:
                 pass
             i += 1
@@ -350,24 +1768,17 @@ async def create_presentation_async(text_content: str, design_number: int, prese
             slide_count += 1
             slide_title = ""
             slide_content = ""
-            slide_image_prompt = None
 
-            # rotate layouts a bit
             layouts = [1, 7, 8] if len(prs.slide_layouts) >= 9 else ([1] if len(prs.slide_layouts) > 1 else [0])
-            if first_time:
-                slide_layout_index = _safe_layout(1 if len(prs.slide_layouts) > 1 else 0)
-                slide_placeholder_index = 1 if len(prs.slide_layouts) > 1 else 0
-                first_time = False
-            else:
-                nxt = last_layout
-                tries = 0
-                while nxt == last_layout and tries < 10:
-                    nxt = random.choice(layouts)
-                    tries += 1
-                slide_layout_index = _safe_layout(nxt)
-                slide_placeholder_index = 2 if slide_layout_index == 8 else 1
-
+            nxt = last_layout
+            tries = 0
+            while nxt == last_layout and tries < 10:
+                nxt = random.choice(layouts)
+                tries += 1
+            slide_layout_index = safe_layout(nxt)
+            placeholder_idx = 2 if slide_layout_index == 8 else 1
             last_layout = slide_layout_index
+
             i += 1
             continue
 
@@ -384,544 +1795,13 @@ async def create_presentation_async(text_content: str, design_number: int, prese
                 i += 1
             continue
 
-        if line.startswith("#Image:"):
-            slide_image_prompt = line.replace("#Image:", "").strip()
-            i += 1
-            continue
-
         i += 1
 
     await commit_slide()
-
     out_path = GENERATED_DIR / f"{presentation_name}.pptx"
     await asyncio.to_thread(prs.save, str(out_path))
     return str(out_path)
 
-
-async def compute_nutrients(req: NutrientsRequest) -> NutrientsResponse:
-    out = await pplx.chat(
-        model=settings.pplx_sonar_model,
-        system=NUTRIENTS_SYSTEM,
-        user=nutrients_prompt(req),
-        temperature=0.1,
-        max_tokens=1400,
-        disable_search=True,                      #  [oai_citation:5‡docs.perplexity.ai](https://docs.perplexity.ai/api-reference/chat-completions-post)
-        response_format={"type": "json_object"},  #  [oai_citation:6‡docs.perplexity.ai](https://docs.perplexity.ai/api-reference/chat-completions-post)
-    )
-
-    # Since response_format is json_object, `out` should already be valid JSON.
-    try:
-        raw = json.loads(out)
-        if not isinstance(raw, dict):
-            raise ValueError("not an object")
-    except Exception:
-        # Last resort repair via Gemini
-        raw = await force_json_with_gemini("NutrientsResponse schema JSON object", out)
-
-    raw = normalize_nutrients_obj(raw, req)
-    return NutrientsResponse.model_validate(raw)
-
-# ---------------- Helpers ----------------
-
-def model_json_or_400(text: str) -> Any:
-    try:
-        return extract_json_object(text)
-    except ModelJSONError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-async def force_json_with_gemini(schema_hint: str, text: str) -> Dict[str, Any]:
-    repair_system = "You repair JSON. Return ONLY valid JSON. No markdown. No extra text."
-    repair_prompt = f"""
-Fix the following invalid/truncated JSON into valid JSON.
-
-Schema hint:
-{schema_hint}
-
-Input:
-{text}
-
-Return ONLY JSON. If impossible, return {{}}.
-""".strip()
-    repaired = await gemini.generate_text(
-        model=settings.gemini_portion_model,
-        system=repair_system,
-        prompt=repair_prompt,
-        temperature=0.0,
-        max_output_tokens=1400,
-    )
-    obj = model_json_or_400(repaired)
-    return obj if isinstance(obj, dict) else {}
-
-
-async def identify_repair_if_list(raw: Any, hints: Optional[List[str]]) -> Dict[str, Any]:
-    if isinstance(raw, list):
-        repair_out = await gemini.generate_text(
-            model=settings.gemini_classifier_model,
-            system=IDENTIFY_REPAIR_SYSTEM,
-            prompt=identify_repair_prompt(raw, hints),
-            temperature=0.2,
-            max_output_tokens=700,
-        )
-        repaired = model_json_or_400(repair_out)
-        if not isinstance(repaired, dict):
-            raise HTTPException(400, "Identify repair did not return a JSON object")
-        return repaired
-
-    if isinstance(raw, dict):
-        return raw
-
-    raise HTTPException(400, "Invalid identify output type")
-
-def normalize_identify_dict(obj: Dict[str, Any]) -> IdentifyResponse:
-    candidates = obj.get("candidates") or []
-    chosen = obj.get("chosen")
-
-    if isinstance(chosen, str):
-        chosen_lower = chosen.strip().lower()
-        match = None
-        for c in candidates:
-            if not isinstance(c, dict):
-                continue
-            if chosen_lower in (
-                str(c.get("name", "")).lower(),
-                str(c.get("normalized_name", "")).lower()
-            ):
-                match = c
-                break
-        if match is None:
-            match = {
-                "name": chosen,
-                "confidence": 0.5,
-                "normalized_name": chosen,
-                "cuisine": None,
-                "is_packaged": None,
-                "notes": "chosen string -> synthesized",
-            }
-            candidates.append(match)
-        obj["chosen"] = match
-        obj["candidates"] = candidates
-
-    if isinstance(obj.get("chosen"), dict) and not obj.get("candidates"):
-        obj["candidates"] = [obj["chosen"]]
-
-    return IdentifyResponse.model_validate(obj)
-
-
-def normalize_identify_obj(obj: Any) -> Dict[str, Any]:
-    if not isinstance(obj, dict):
-        return {"candidates": [], "chosen": {"name": "unknown", "confidence": 0.0, "normalized_name": "unknown"}}
-
-    candidates = obj.get("candidates") or []
-    chosen = obj.get("chosen")
-
-    # handle chosen sometimes being string
-    if isinstance(chosen, str):
-        chosen_str = chosen
-        chosen = None
-        for c in candidates:
-            if isinstance(c, dict) and (c.get("name") == chosen_str or c.get("normalized_name") == chosen_str):
-                chosen = c
-                break
-        if chosen is None:
-            chosen = {"name": chosen_str, "confidence": 0.5, "normalized_name": chosen_str}
-
-    if not isinstance(chosen, dict):
-        # fall back to best candidate
-        best = None
-        best_conf = -1
-        for c in candidates:
-            if isinstance(c, dict):
-                conf = float(c.get("confidence") or 0.0)
-                if conf > best_conf:
-                    best_conf = conf
-                    best = c
-        chosen = best or {"name": "unknown", "confidence": 0.0, "normalized_name": "unknown"}
-
-    # ensure candidates list of dicts
-    clean_candidates = [c for c in candidates if isinstance(c, dict)]
-    if not clean_candidates:
-        clean_candidates = [chosen]
-
-    obj["candidates"] = clean_candidates[:3]
-    obj["chosen"] = chosen
-    return obj
-
-def normalize_portion_obj(obj: Any) -> Dict[str, Any]:
-    if not isinstance(obj, dict):
-        obj = {}
-
-    obj.setdefault("servings", 1.0)
-    obj.setdefault("grams_total", 0.0)
-    obj.setdefault("items_count", None)
-    obj.setdefault("household", None)
-    obj.setdefault("confidence", 0.6)
-    obj.setdefault("assumptions", [])
-
-    # household must be string or None
-    h = obj.get("household")
-    if h is not None and not isinstance(h, str):
-        obj["household"] = str(h)
-
-    if not isinstance(obj.get("assumptions"), list):
-        obj["assumptions"] = [str(obj["assumptions"])]
-
-    try:
-        obj["servings"] = float(obj["servings"] or 1.0)
-    except Exception:
-        obj["servings"] = 1.0
-
-    try:
-        obj["grams_total"] = float(obj["grams_total"] or 0.0)
-    except Exception:
-        obj["grams_total"] = 0.0
-
-    ic = obj.get("items_count")
-    if ic is None:
-        obj["items_count"] = None
-    else:
-        try:
-            obj["items_count"] = float(ic)
-        except Exception:
-            obj["items_count"] = None
-
-    try:
-        obj["confidence"] = float(obj["confidence"])
-    except Exception:
-        obj["confidence"] = 0.6
-
-    # clamp
-    obj["confidence"] = max(0.0, min(1.0, obj["confidence"]))
-    return obj
-
-def normalize_nutrients_obj(obj: Any, req: NutrientsRequest) -> Dict[str, Any]:
-    if not isinstance(obj, dict):
-        obj = {}
-
-    # force required top-level keys
-    obj.setdefault("food_name", req.food_name)
-    if "portion" not in obj or not isinstance(obj["portion"], dict):
-        # use request portion as source of truth
-        p = req.portion
-        obj["portion"] = {
-            "servings": p.servings,
-            "grams_total": p.grams_total,
-            "items_count": p.items_count,
-            "household": p.household,
-            "confidence": getattr(p, "confidence", 0.6) or 0.6,
-            "assumptions": getattr(p, "assumptions", []) or [],
-        }
-
-    obj.setdefault("calories_kcal", 0.0)
-    obj.setdefault("macros", {})
-    obj.setdefault("micros", {})
-    obj.setdefault("vitamins", {})
-    obj.setdefault("minerals", {})
-    obj.setdefault("ingredients_guess", [])
-    obj.setdefault("allergens_guess", [])
-    obj.setdefault("data_sources", [])
-    obj.setdefault("notes", [])
-
-    # lists must be lists
-    for k in ("ingredients_guess", "allergens_guess", "data_sources", "notes"):
-        if not isinstance(obj.get(k), list):
-            obj[k] = [str(obj.get(k))]
-
-    # If user doesn't want per 100g
-    if not req.include_per_100g:
-        for grp in ("macros", "micros", "vitamins", "minerals"):
-            if isinstance(obj.get(grp), dict):
-                for _, item in obj[grp].items():
-                    if isinstance(item, dict):
-                        item["per_100g_amount"] = None
-
-    return obj
-
-# ---------------- Routes ----------------
-
-@app.get("/health")
-async def health():
-    return {"ok": True, "env": settings.app_env}
-
-@app.get("/v1/meta")
-async def meta():
-    return {
-        "version": "1.0.0",
-        "models": {
-            "gemini_classifier": settings.gemini_classifier_model,
-            "gemini_portion": settings.gemini_portion_model,
-            "perplexity_sonar": settings.pplx_sonar_model,
-        },
-    }
-
-@app.post("/v1/food/identify", response_model=IdentifyResponse)
-async def identify_food(req: IdentifyRequest):
-    if req.mode != "text" or not req.text:
-        raise HTTPException(status_code=422, detail="Use mode=text with text, or use /v1/food/identify-image.")
-
-    out = await gemini.generate_text(
-        model=settings.gemini_classifier_model,
-        system=IDENTIFY_SYSTEM,
-        prompt=identify_user_prompt_text(req.text, req.hints),
-        temperature=0.2,
-        max_output_tokens=800,
-    )
-
-    raw = model_json_or_400(out)
-    obj = normalize_identify_obj(raw)
-    return IdentifyResponse.model_validate(obj)
-
-@app.post("/v1/food/identify-image", response_model=IdentifyResponse)
-async def identify_food_image(file: UploadFile = File(...), hints: Optional[str] = None):
-    image_bytes = await file.read()
-    if not image_bytes:
-        raise HTTPException(status_code=422, detail="Empty upload (image_bytes is empty).")
-
-    hints_list = [h.strip() for h in (hints or "").split(",") if h.strip()] or None
-
-    out = await gemini.generate_with_image(
-        model=settings.gemini_classifier_model,
-        system=IDENTIFY_SYSTEM,
-        prompt=identify_user_prompt_image(hints_list),
-        image_bytes=image_bytes,
-        mime_type=file.content_type or "image/jpeg",
-        temperature=0.2,
-        max_output_tokens=900,
-    )
-
-    raw = model_json_or_400(out)
-    obj = normalize_identify_obj(raw)
-    return IdentifyResponse.model_validate(obj)
-
-@app.post("/v1/food/portion", response_model=PortionResponse)
-async def portion_text(req: PortionRequest):
-    if req.mode != "text":
-        raise HTTPException(status_code=422, detail="Use /v1/food/portion-image for images.")
-
-    out = await gemini.generate_text(
-        model=settings.gemini_portion_model,
-        system=PORTION_SYSTEM,
-        prompt=portion_prompt_text(req.food_name, req.text_context),
-        temperature=0.2,
-        max_output_tokens=700,
-    )
-
-    try:
-        raw = model_json_or_400(out)
-    except HTTPException:
-        raw = await force_json_with_gemini(
-            '{"servings":number,"grams_total":number,"items_count":number|null,"household":string|null,"confidence":number,"assumptions":string[]}',
-            out,
-        )
-
-    raw = normalize_portion_obj(raw)
-    est = PortionEstimate.model_validate(raw)
-
-    if est.grams_total <= 0:
-        est = PortionEstimate(
-            servings=max(1.0, est.servings),
-            grams_total=100.0,
-            items_count=None,
-            household=req.household_measure or "1 serving (default 100g)",
-            confidence=0.3,
-            assumptions=["Defaulted to 100g because model output was uncertain"],
-        )
-
-    return PortionResponse(food_name=req.food_name, portion=est)
-
-@app.post("/v1/food/portion-image", response_model=PortionResponse)
-async def portion_image(food_name: str, file: UploadFile = File(...), text_context: Optional[str] = None):
-    image_bytes = await file.read()
-    if not image_bytes:
-        raise HTTPException(status_code=422, detail="Empty upload (image_bytes is empty).")
-
-    out = await gemini.generate_with_image(
-        model=settings.gemini_portion_model,
-        system=PORTION_SYSTEM,
-        prompt=portion_prompt_image(food_name, text_context),
-        image_bytes=image_bytes,
-        mime_type=file.content_type or "image/jpeg",
-        temperature=0.2,
-        max_output_tokens=900,
-    )
-
-    try:
-        raw = model_json_or_400(out)
-    except HTTPException:
-        raw = await force_json_with_gemini(
-            '{"servings":number,"grams_total":number,"items_count":number|null,"household":string|null,"confidence":number,"assumptions":string[]}',
-            out,
-        )
-
-    raw = normalize_portion_obj(raw)
-    est = PortionEstimate.model_validate(raw)
-
-    if est.grams_total <= 0:
-        est = PortionEstimate(
-            servings=max(1.0, est.servings),
-            grams_total=100.0,
-            items_count=None,
-            household="1 serving (default 100g)",
-            confidence=0.3,
-            assumptions=["Defaulted to 100g because model output was uncertain"],
-        )
-
-    return PortionResponse(food_name=food_name, portion=est)
-
-@app.post("/v1/food/nutrients", response_model=NutrientsResponse)
-async def nutrients(req: NutrientsRequest):
-    if req.portion is None:
-        raise HTTPException(status_code=422, detail="portion is required. Call /v1/food/portion first.")
-    return await compute_nutrients(req)
-
-@app.post("/v1/food/analyze", response_model=AnalyzeResponse)
-async def analyze_text(req: AnalyzeTextRequest):
-    # 1) Identify
-    identify_out = await gemini.generate_text(
-        model=settings.gemini_classifier_model,
-        system=IDENTIFY_SYSTEM,
-        prompt=identify_user_prompt_text(req.text, req.hints),
-        temperature=0.2,
-        max_output_tokens=800,
-    )
-    identify_raw = model_json_or_400(identify_out)
-    identify_obj = normalize_identify_obj(identify_raw)
-    identify_res = IdentifyResponse.model_validate(identify_obj)
-    chosen = identify_res.chosen.normalized_name or identify_res.chosen.name
-
-    # 2) Portion (text)
-    portion_out = await gemini.generate_text(
-        model=settings.gemini_portion_model,
-        system=PORTION_SYSTEM,
-        prompt=portion_prompt_text(chosen, req.text),
-        temperature=0.2,
-        max_output_tokens=700,
-    )
-    try:
-        portion_raw = model_json_or_400(portion_out)
-    except HTTPException:
-        portion_raw = await force_json_with_gemini(
-            '{"servings":number,"grams_total":number,"items_count":number|null,"household":string|null,"confidence":number,"assumptions":string[]}',
-            portion_out,
-        )
-
-    portion_raw = normalize_portion_obj(portion_raw)
-    portion_est = PortionEstimate.model_validate(portion_raw)
-
-    if portion_est.grams_total <= 0:
-        portion_est = PortionEstimate(
-            servings=1.0,
-            grams_total=100.0,
-            items_count=None,
-            household="1 serving (default 100g)",
-            confidence=0.3,
-            assumptions=["Defaulted to 100g because model output was uncertain"],
-        )
-
-    portion_res = PortionResponse(food_name=chosen, portion=portion_est)
-
-    # 3) Nutrients
-    nreq = NutrientsRequest(
-        food_name=chosen,
-        portion=portion_est,
-        region=req.region,
-        include_per_100g=req.include_per_100g,
-    )
-
-    nutrients_out = await pplx.chat(
-        model=settings.pplx_sonar_model,
-        system=NUTRIENTS_SYSTEM,
-        user=nutrients_prompt(nreq),
-        temperature=0.2,
-        max_tokens=900,
-    )
-
-    try:
-        nutrients_raw = model_json_or_400(nutrients_out)
-        if not isinstance(nutrients_raw, dict):
-            raise HTTPException(status_code=400, detail="Nutrients output not an object")
-    except HTTPException:
-        nutrients_raw = await force_json_with_gemini("NutrientsResponse schema JSON object", nutrients_out)
-
-    nutrients_raw = normalize_nutrients_obj(nutrients_raw, nreq)
-    nutrients_res = NutrientsResponse.model_validate(nutrients_raw)
-
-    return AnalyzeResponse(
-        identify=identify_res,
-        portion=portion_res,
-        nutrients=nutrients_res,
-        cost_tier={"identify": "$", "portion": "$$", "nutrients": "$$$$"},
-    )
-@app.post("/v1/food/analyze-image", response_model=AnalyzeResponse)
-async def analyze_image(
-    file: UploadFile = File(...),
-    hints: Optional[str] = None,
-    region: str = "IN",
-    include_per_100g: bool = True,
-):
-    image_bytes = await file.read()
-    if not image_bytes:
-        raise HTTPException(400, "Uploaded image is empty")
-
-    hints_list = [h.strip() for h in (hints or "").split(",") if h.strip()] or None
-
-    # ---------- Identify ----------
-    identify_out = await gemini.generate_with_image(
-        model=settings.gemini_classifier_model,
-        system=IDENTIFY_SYSTEM,
-        prompt=identify_user_prompt_image(hints_list),
-        image_bytes=image_bytes,
-        mime_type=file.content_type or "image/jpeg",
-        temperature=0.2,
-        max_output_tokens=900,
-    )
-
-    raw_ident = model_json_or_400(identify_out)
-    raw_ident = await identify_repair_if_list(raw_ident, hints_list)
-    identify = normalize_identify_dict(raw_ident)
-    food_name = identify.chosen.normalized_name or identify.chosen.name
-
-    # ---------- Portion ----------
-    portion_out = await gemini.generate_with_image(
-        model=settings.gemini_portion_model,
-        system=PORTION_SYSTEM,
-        prompt=portion_prompt_image(food_name, ctx=None),
-        image_bytes=image_bytes,
-        mime_type=file.content_type or "image/jpeg",
-        temperature=0.2,
-        max_output_tokens=900,
-    )
-
-    try:
-        raw_portion = model_json_or_400(portion_out)
-    except HTTPException:
-        raw_portion = await force_json_with_gemini(
-            '{"servings":number,"grams_total":number,"items_count":number|null,"household":string|null,"confidence":number,"assumptions":string[]}',
-            portion_out,
-        )
-
-    raw_portion = normalize_portion_obj(raw_portion)
-    portion = PortionEstimate.model_validate(raw_portion)
-
-    # ---------- Nutrients ----------
-    nreq = NutrientsRequest(
-        food_name=food_name,
-        portion=portion,
-        region=region,
-        include_per_100g=include_per_100g,
-    )
-
-    nutrients_res = await compute_nutrients(nreq)
-
-    return AnalyzeResponse(
-        identify=identify,
-        portion=PortionResponse(food_name=food_name, portion=portion),
-        nutrients=nutrients_res,
-        cost_tier={"identify": "$", "portion": "$$", "nutrients": "$$$$"},
-    )
-
-# --------------------------------------------------
-# PPT Routes (single instance)
-# --------------------------------------------------
 
 @app.post("/v1/ppt/generate", response_model=PPTGenerateResponse)
 async def generate_ppt(req: PPTGenerateRequest):
@@ -944,12 +1824,7 @@ async def generate_ppt(req: PPTGenerateRequest):
 
     ppt_path = await create_presentation_async(deck_text, design_number, filename)
 
-    base_url = (settings.public_base_url or "").rstrip("/")
-    if not base_url:
-        # Render provides your onrender URL; easiest is to set PUBLIC_BASE_URL env var in Render
-        # Example: https://your-service.onrender.com
-        base_url = "https://api.dashovia.com"
-
+    base_url = (settings.public_base_url or "https://api.dashovia.com").rstrip("/")
     download_url = f"{base_url}/v1/ppt/download/{Path(ppt_path).name}"
 
     return PPTGenerateResponse(
@@ -958,6 +1833,7 @@ async def generate_ppt(req: PPTGenerateRequest):
         download_url=download_url,
         fallback_used=fallback_used,
     )
+
 
 @app.get("/v1/ppt/download/{filename}")
 async def download_ppt(filename: str):
