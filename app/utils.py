@@ -1,154 +1,68 @@
 # app/utils.py
 from __future__ import annotations
 
+from typing import Any
 import json
-from typing import Any, Optional
 
 
-class ModelJSONError(Exception):
+class ModelJSONError(ValueError):
     pass
 
 
-def _find_first_json_start(s: str) -> Optional[int]:
-    if not s:
-        return None
-    brace = s.find("{")
-    brack = s.find("[")
-    if brace == -1 and brack == -1:
-        return None
-    if brace == -1:
-        return brack
-    if brack == -1:
-        return brace
-    return min(brace, brack)
-
-
-def extract_json_object(s: str) -> Any:
+def extract_json_object(text: str) -> Any:
     """
-    Extract the first valid JSON object/array from a text blob.
-    Works even if the model adds extra prose before/after.
-    Does NOT rely on regex recursion (Python re doesn't support ?R).
+    Extract the first valid JSON object or array from a string.
+    Handles model 'noise' before/after JSON.
     """
-    if not isinstance(s, str):
-        raise ModelJSONError("Model output is not a string")
+    if not text or not isinstance(text, str):
+        raise ModelJSONError("Empty model output")
 
-    start = _find_first_json_start(s)
-    if start is None:
-        raise ModelJSONError("No valid JSON object/array found in model output")
+    s = text.strip()
 
-    # Scan forward and find the matching closing brace/bracket
-    stack = []
-    in_string = False
-    escape = False
+    # Fast path: whole string is JSON
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
 
-    for i in range(start, len(s)):
-        ch = s[i]
-
-        if in_string:
-            if escape:
-                escape = False
-                continue
-            if ch == "\\":
-                escape = True
-                continue
-            if ch == '"':
-                in_string = False
-            continue
-
-        # not in string
-        if ch == '"':
-            in_string = True
-            continue
-
+    # Find first '{' or '[' and brace-match
+    start_positions = []
+    for i, ch in enumerate(s):
         if ch in "{[":
-            stack.append(ch)
-        elif ch in "}]":
-            if not stack:
+            start_positions.append(i)
+
+    for start in start_positions:
+        opening = s[start]
+        closing = "}" if opening == "{" else "]"
+        depth = 0
+        in_str = False
+        esc = False
+
+        for j in range(start, len(s)):
+            c = s[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
                 continue
-            open_ch = stack.pop()
-            if (open_ch == "{" and ch != "}") or (open_ch == "[" and ch != "]"):
-                # mismatched - abort
-                break
-            if not stack:
-                candidate = s[start : i + 1].strip()
-                try:
-                    return json.loads(candidate)
-                except json.JSONDecodeError:
-                    # try a “looser” repair: cut to last complete char and retry
-                    repaired = _loose_repair(candidate)
+
+            if c == '"':
+                in_str = True
+                continue
+
+            if c == opening:
+                depth += 1
+            elif c == closing:
+                depth -= 1
+                if depth == 0:
+                    candidate = s[start : j + 1]
                     try:
-                        return json.loads(repaired)
+                        return json.loads(candidate)
                     except Exception:
-                        excerpt = candidate[:250].replace("\n", "\\n")
-                        raise ModelJSONError(f"Invalid JSON from model. Excerpt={excerpt}")
+                        break  # try next start position
 
-    # If we reached here, JSON was likely truncated
-    candidate = s[start:].strip()
-    repaired = _truncate_to_balanced(candidate)
-    if repaired:
-        try:
-            return json.loads(repaired)
-        except Exception:
-            pass
-
-    excerpt = candidate[:250].replace("\n", "\\n")
-    raise ModelJSONError(f"Invalid JSON from model (likely truncated). Excerpt={excerpt}")
-
-
-def _truncate_to_balanced(candidate: str) -> Optional[str]:
-    """Try to cut at the last position where braces/brackets are balanced."""
-    stack = []
-    in_string = False
-    escape = False
-    last_balanced_end = None
-
-    for i, ch in enumerate(candidate):
-        if in_string:
-            if escape:
-                escape = False
-                continue
-            if ch == "\\":
-                escape = True
-                continue
-            if ch == '"':
-                in_string = False
-            continue
-
-        if ch == '"':
-            in_string = True
-            continue
-
-        if ch in "{[":
-            stack.append(ch)
-        elif ch in "}]":
-            if not stack:
-                continue
-            open_ch = stack.pop()
-            if (open_ch == "{" and ch != "}") or (open_ch == "[" and ch != "]"):
-                return None
-            if not stack:
-                last_balanced_end = i
-
-    if last_balanced_end is None:
-        return None
-    return candidate[: last_balanced_end + 1].strip()
-
-
-def _loose_repair(s: str) -> str:
-    """
-    Tiny repair: remove trailing commas before } or ].
-    (Does NOT invent missing braces; that's handled by truncation.)
-    """
-    out = []
-    i = 0
-    while i < len(s):
-        if s[i] == ",":
-            j = i + 1
-            while j < len(s) and s[j].isspace():
-                j += 1
-            if j < len(s) and s[j] in "}]":
-                i += 1
-                continue
-        out.append(s[i])
-        i += 1
-    return "".join(out)
+    excerpt = s[:300].replace("\n", "\\n")
+    raise ModelJSONError(f"No valid JSON object/array found in model output. Excerpt={excerpt}")
