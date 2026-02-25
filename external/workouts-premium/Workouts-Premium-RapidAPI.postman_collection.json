@@ -1,0 +1,237 @@
+{
+  "info": {
+    "_postman_id": "2f22468e-6cd0-4a9d-b6bf-7f9556f2f719",
+    "name": "Workouts Premium",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "15049037"
+  },
+  "item": [
+    {
+      "name": "root",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "https://gmw.dashovia.com/",
+          "protocol": "https",
+          "host": [
+            "gmw",
+            "dashovia",
+            "com"
+          ],
+          "path": []
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "available-muscles",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "https://gmw.dashovia.com/available-muscles",
+          "protocol": "https",
+          "host": [
+            "gmw",
+            "dashovia",
+            "com"
+          ],
+          "path": [
+            "available-muscles"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "available-body-parts",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "https://gmw.dashovia.com/available-body-parts",
+          "protocol": "https",
+          "host": [
+            "gmw",
+            "dashovia",
+            "com"
+          ],
+          "path": [
+            "available-body-parts"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "exercises-by-muscles",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "https://gmw.dashovia.com/exercises-by-muscles?muscle1=biceps&muscle2=triceps",
+          "protocol": "https",
+          "host": [
+            "gmw",
+            "dashovia",
+            "com"
+          ],
+          "path": [
+            "exercises-by-muscles"
+          ],
+          "query": [
+            {
+              "key": "muscle1",
+              "value": "biceps"
+            },
+            {
+              "key": "muscle2",
+              "value": "triceps"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "exercises-by-body-parts",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "https://gmw.dashovia.com/exercises-by-body-parts?part1=chest&part2=back",
+          "protocol": "https",
+          "host": [
+            "gmw",
+            "dashovia",
+            "com"
+          ],
+          "path": [
+            "exercises-by-body-parts"
+          ],
+          "query": [
+            {
+              "key": "part1",
+              "value": "chest"
+            },
+            {
+              "key": "part2",
+              "value": "back"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "exercise-by-id",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "https://gmw.dashovia.com/exercise/3TZduzM",
+          "protocol": "https",
+          "host": [
+            "gmw",
+            "dashovia",
+            "com"
+          ],
+          "path": [
+            "exercise",
+            "3TZduzM"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "suggest-workouts",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "https://gmw.dashovia.com/suggest-workouts?question=I%20want%20to%20build%20bigger%20arms%20and%20shoulder%20muscles",
+          "protocol": "https",
+          "host": [
+            "gmw",
+            "dashovia",
+            "com"
+          ],
+          "path": [
+            "suggest-workouts"
+          ],
+          "query": [
+            {
+              "key": "question",
+              "value": "I want to build bigger arms and shoulder muscles"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "media-gif",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "https://gmw.dashovia.com/media/gif/05Cf2v8.gif",
+          "protocol": "https",
+          "host": [
+            "gmw",
+            "dashovia",
+            "com"
+          ],
+          "path": [
+            "media",
+            "gif",
+            "05Cf2v8.gif"
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}
