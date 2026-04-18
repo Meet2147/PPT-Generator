@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DeckMint</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-mark">D</div>
+          <div>
+            <p class="eyebrow">DeckMint</p>
+            <h1>Gamma-style presentation generation, built for PowerPoint users.</h1>
+          </div>
+        </div>
+        <a class="ghost-button" href="#pricing">See pricing</a>
+      </header>
+
+      <main>
+        <section class="hero-grid">
+          <div class="hero-copy">
+            <span class="pill">Subscription-first</span>
+            <h2>Generate polished decks that feel client-ready on the first export.</h2>
+            <p>
+              DeckMint combines a clean web app with a FastAPI backend so we can sell it as a
+              real product, not just an endpoint. The output is structured for students, teams,
+              and executives who need professional slides fast.
+            </p>
+            <div class="hero-points">
+              <div>
+                <strong>Editable PPTX</strong>
+                <span>No screenshot slides. Real presentation files.</span>
+              </div>
+              <div>
+                <strong>Better than credits</strong>
+                <span>Predictable subscriptions make pricing easier to sell.</span>
+              </div>
+              <div>
+                <strong>Faster storytelling</strong>
+                <span>Prompt, narrative, design preset, export.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="hero-panel">
+            <div class="glass-card">
+              <div class="glass-header">
+                <span class="signal-dot"></span>
+                <span>Generate a presentation</span>
+              </div>
+              <form id="deck-form">
+                <label>
+                  Topic
+                  <input id="topic" name="topic" type="text" value="AI presentation generation for modern teams" required />
+                </label>
+                <label>
+                  Objective
+                  <input id="objective" name="objective" type="text" value="Position the product as a premium subscription alternative to Gamma." />
+                </label>
+                <div class="form-grid">
+                  <label>
+                    Audience
+                    <select id="audience" name="audience">
+                      <option value="student">Student</option>
+                      <option value="corporate" selected>Corporate</option>
+                      <option value="executive">Executive</option>
+                    </select>
+                  </label>
+                  <label>
+                    Tone
+                    <select id="tone" name="tone">
+                      <option value="professional" selected>Professional</option>
+                      <option value="persuasive">Persuasive</option>
+                      <option value="analytical">Analytical</option>
+                      <option value="visionary">Visionary</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="form-grid">
+                  <label>
+                    Design
+                    <select id="design_number" name="design_number"></select>
+                  </label>
+                  <label>
+                    Slides
+                    <input id="slide_count" name="slide_count" type="number" min="6" max="15" value="9" />
+                  </label>
+                </div>
+                <div class="form-grid">
+                  <label>
+                    Buyer name
+                    <input id="buyer_name" name="buyer_name" type="text" value="Meet Jethwa" />
+                  </label>
+                  <label>
+                    Buyer email
+                    <input id="buyer_email" name="buyer_email" type="email" value="meet@example.com" />
+                  </label>
+                </div>
+                <button class="primary-button" type="submit">Generate deck</button>
+              </form>
+              <div id="result" class="result-card" hidden></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="stats-row">
+          <article>
+            <span>Positioning</span>
+            <strong>Gamma-like UX</strong>
+            <p>But optimized around PowerPoint export quality and subscription simplicity.</p>
+          </article>
+          <article>
+            <span>Backend</span>
+            <strong>FastAPI</strong>
+            <p>Ready for auth, billing, analytics, and future workspace features.</p>
+          </article>
+          <article>
+            <span>Packaging</span>
+            <strong>Web app + API</strong>
+            <p>Sell the app directly and expose the API later for power users.</p>
+          </article>
+        </section>
+
+        <section id="pricing" class="pricing-section">
+          <div class="section-copy">
+            <p class="eyebrow">Pricing</p>
+            <h3>Competitive subscription tiers, without credit confusion.</h3>
+            <p>
+              We benchmarked Gamma’s current public plan structure around tiered subscriptions and
+              positioned this product around predictable monthly and annual plans for clear upsell paths.
+            </p>
+          </div>
+          <div class="billing-toggle" id="billing-toggle">
+            <button class="toggle-button active" data-plan="monthly">Monthly</button>
+            <button class="toggle-button" data-plan="annual">Annual</button>
+          </div>
+          <div id="pricing-grid" class="pricing-grid"></div>
+        </section>
+      </main>
+    </div>
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

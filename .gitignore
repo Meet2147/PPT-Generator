@@ -1,0 +1,5 @@
+.fastapicloud
+__pycache__/
+*.pyc
+Cache/
+GeneratedPresentations/
