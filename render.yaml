@@ -1,0 +1,59 @@
+services:
+  - type: web
+    runtime: python
+    name: deckmint-api
+    plan: starter
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/v1/health
+    autoDeployTrigger: commit
+    domains:
+      - api.dashovia.com
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: PUBLIC_BASE_URL
+        value: https://api.dashovia.com
+      - key: DOCS_ADMIN_SECRET
+        sync: false
+      - key: DOCS_JWT_SECRET
+        sync: false
+      - key: PPLX_API_KEY
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: RAZORPAY_PLAN_STUDENT_MONTHLY
+        sync: false
+      - key: RAZORPAY_PLAN_STUDENT_ANNUAL
+        sync: false
+      - key: RAZORPAY_PLAN_CORPORATE_MONTHLY
+        sync: false
+      - key: RAZORPAY_PLAN_CORPORATE_ANNUAL
+        sync: false
+      - key: RAZORPAY_PLAN_EXECUTIVE_MONTHLY
+        sync: false
+      - key: RAZORPAY_PLAN_EXECUTIVE_ANNUAL
+        sync: false
+
+  - type: web
+    runtime: static
+    name: deckmint-web
+    buildCommand: python3 scripts/build_web.py
+    staticPublishPath: web-dist
+    autoDeployTrigger: commit
+    domains:
+      - slides.dashovia.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: API_BASE_URL
+        value: https://api.dashovia.com
+      - key: WEB_APP_NAME
+        value: DeckMint

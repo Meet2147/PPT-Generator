@@ -1,4 +1,6 @@
-from app.models import DesignPreset, FeatureItem, SubscriptionPlan
+from app.config import settings
+from app.models import DesignPreset, FeatureItem, LifetimeOffer, SubscriptionPlan
+from app.services.storage_service import count_lifetime_claims
 
 
 def get_subscription_catalog() -> list[SubscriptionPlan]:
@@ -6,56 +8,80 @@ def get_subscription_catalog() -> list[SubscriptionPlan]:
         SubscriptionPlan(
             slug="student",
             name="Student",
-            audience="Students, founders, solo operators",
-            price_monthly=8,
-            price_annual=79,
-            savings_label="Save 18% yearly",
-            description="Fast, polished decks for coursework, pitches, and internships.",
+            audience="Individuals creating polished decks regularly",
+            price_monthly=2999,
+            price_annual=29999,
+            savings_label="Save Rs 5,989 yearly",
+            description="For students, founders, and independent professionals who want serious presentation quality without hiring a designer.",
             cta="Start student plan",
             features=[
-                FeatureItem(label="Unlimited presentations"),
+                FeatureItem(label="Best for light but recurring usage"),
                 FeatureItem(label="Up to 15 slides per generation"),
                 FeatureItem(label="Presentation-ready PPTX export", emphasis=True),
-                FeatureItem(label="Academic and startup deck presets"),
-                FeatureItem(label="Email support"),
+                FeatureItem(label="Slide preview workflow before export"),
+                FeatureItem(label="PPTX plus optional PDF export"),
             ],
         ),
         SubscriptionPlan(
             slug="corporate",
             name="Corporate",
-            audience="Teams building sales, strategy, and client decks",
-            price_monthly=24,
-            price_annual=228,
-            savings_label="Save 21% yearly",
-            description="Designed to undercut Gamma-style business plans with cleaner PPT output.",
+            audience="Teams with ongoing deck production",
+            price_monthly=9999,
+            price_annual=99999,
+            savings_label="Save Rs 19,989 yearly",
+            description="The main plan for startups and companies shipping proposals, strategy decks, GTM decks, and recurring client presentations.",
             cta="Choose corporate",
             recommended=True,
             features=[
                 FeatureItem(label="Everything in Student"),
                 FeatureItem(label="Brand-safe design presets", emphasis=True),
-                FeatureItem(label="Meeting, proposal, and QBR narratives"),
-                FeatureItem(label="Priority rendering queue"),
-                FeatureItem(label="Shared workspace roadmap"),
+                FeatureItem(label="Proposal, QBR, GTM, and sales narratives"),
+                FeatureItem(label="Priority rendering and better turnaround"),
+                FeatureItem(label="Designed for weekly internal and client usage"),
             ],
         ),
         SubscriptionPlan(
             slug="executive",
             name="Executive",
-            audience="Leadership, agencies, and premium client delivery",
-            price_monthly=49,
-            price_annual=468,
-            savings_label="Save 20% yearly",
-            description="Premium tier for high-stakes decks, polished storytelling, and concierge support.",
+            audience="Agencies, leaders, and API-heavy customers",
+            price_monthly=24999,
+            price_annual=249999,
+            savings_label="Save Rs 49,989 yearly",
+            description="Premium pricing for agencies, leadership teams, and customers who need high presentation throughput or plan to build on the API.",
             cta="Go executive",
             features=[
                 FeatureItem(label="Everything in Corporate"),
                 FeatureItem(label="Executive narrative tuning", emphasis=True),
-                FeatureItem(label="Advanced visual polish"),
-                FeatureItem(label="White-label export roadmap"),
-                FeatureItem(label="Dedicated support"),
+                FeatureItem(label="Advanced polish and premium queue"),
+                FeatureItem(label="Best fit for API resale and higher-volume usage"),
+                FeatureItem(label="Dedicated support and roadmap priority"),
             ],
         ),
     ]
+
+
+def get_lifetime_offer() -> LifetimeOffer:
+    claimed_spots = count_lifetime_claims()
+    remaining_spots = max(settings.razorpay_lifetime_limit - claimed_spots, 0)
+    return LifetimeOffer(
+        slug="earlybird",
+        name="Earlybird Lifetime",
+        price=settings.razorpay_lifetime_amount // 100,
+        original_price=49999,
+        description="One-time launch offer for the first 1000 believers. Pay once and keep core creator access for life.",
+        cta="Claim lifetime deal",
+        badge="Limited launch offer",
+        note="This should stay scarce. Once 1000 lifetime customers are in, the offer closes.",
+        claimed_spots=claimed_spots,
+        remaining_spots=remaining_spots,
+        sold_out=remaining_spots == 0,
+        features=[
+            FeatureItem(label="One-time payment, no recurring subscription", emphasis=True),
+            FeatureItem(label="Lifetime access to current creator features"),
+            FeatureItem(label="Priority access to future API beta programs"),
+            FeatureItem(label="Ideal for creating urgency and social proof"),
+        ],
+    )
 
 
 def get_design_catalog() -> list[DesignPreset]:

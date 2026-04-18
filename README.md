@@ -17,6 +17,7 @@ DeckMint is a subscription-first presentation generation product built as both a
 - `GET /api/v1/presentations/download/{filename}`
 - `POST /api/v1/billing/checkout`
 - `POST /api/v1/billing/webhooks/razorpay`
+- `POST /api/v1/docs-token`
 
 ## Local run
 
@@ -35,6 +36,8 @@ Optional:
 - `RAZORPAY_KEY_ID`
 - `RAZORPAY_KEY_SECRET`
 - `RAZORPAY_WEBHOOK_SECRET`
+- `DOCS_ADMIN_SECRET`
+- `DOCS_JWT_SECRET`
 - `RAZORPAY_PLAN_STUDENT_MONTHLY`
 - `RAZORPAY_PLAN_STUDENT_ANNUAL`
 - `RAZORPAY_PLAN_CORPORATE_MONTHLY`
@@ -56,3 +59,33 @@ Use Razorpay Subscriptions for this product and create six plans:
 - `Executive Annual`
 
 Then map those plan ids into the matching environment variables above.
+
+The `Earlybird Lifetime` offer is intentionally handled as a one-time Razorpay Payment Link instead of a subscription.
+
+## Render split deployment
+
+This repo is set up for two separate Render services via [render.yaml](/Users/meetjethwa/Development/PPT_Latest/render.yaml:1):
+
+- `deckmint-api` as the FastAPI backend at `api.dashovia.com`
+- `deckmint-web` as the static frontend at `slides.dashovia.com`
+
+The frontend is built with:
+
+```bash
+python3 scripts/build_web.py
+```
+
+That generates `web-dist/` and injects a `config.js` file with the API base URL for the deployed web app.
+
+## Swagger protection
+
+The public FastAPI docs are disabled by default. To get a 24-hour Swagger access token:
+
+```bash
+curl -X POST https://api.dashovia.com/api/v1/docs-token \
+  -H "Content-Type: application/json" \
+  -H "X-Docs-Admin-Secret: YOUR_DOCS_ADMIN_SECRET" \
+  -d '{"requested_by":"admin"}'
+```
+
+Then open the returned `docs_url`.

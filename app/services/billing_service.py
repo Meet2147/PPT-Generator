@@ -1,56 +1,59 @@
 import base64
 import hashlib
 import hmac
-import os
-
+import time
 import requests
 
 from app.config import settings
 from app.models import BillingCheckoutRequest
+from app.services.storage_service import count_lifetime_claims
 
 
 PLAN_MATRIX = {
     ("student", "monthly"): {
-        "plan_id_env": "RAZORPAY_PLAN_STUDENT_MONTHLY",
+        "settings_key": "razorpay_plan_student_monthly",
         "plan_name": "Student Monthly",
         "description": "Student plan billed monthly",
-        "amount": 80000,
+        "amount": 299900,
     },
     ("student", "annual"): {
-        "plan_id_env": "RAZORPAY_PLAN_STUDENT_ANNUAL",
+        "settings_key": "razorpay_plan_student_annual",
         "plan_name": "Student Annual",
         "description": "Student plan billed annually",
-        "amount": 790000,
+        "amount": 2999900,
     },
     ("corporate", "monthly"): {
-        "plan_id_env": "RAZORPAY_PLAN_CORPORATE_MONTHLY",
+        "settings_key": "razorpay_plan_corporate_monthly",
         "plan_name": "Corporate Monthly",
         "description": "Corporate plan billed monthly",
-        "amount": 240000,
+        "amount": 999900,
     },
     ("corporate", "annual"): {
-        "plan_id_env": "RAZORPAY_PLAN_CORPORATE_ANNUAL",
+        "settings_key": "razorpay_plan_corporate_annual",
         "plan_name": "Corporate Annual",
         "description": "Corporate plan billed annually",
-        "amount": 2280000,
+        "amount": 9999900,
     },
     ("executive", "monthly"): {
-        "plan_id_env": "RAZORPAY_PLAN_EXECUTIVE_MONTHLY",
+        "settings_key": "razorpay_plan_executive_monthly",
         "plan_name": "Executive Monthly",
         "description": "Executive plan billed monthly",
-        "amount": 490000,
+        "amount": 2499900,
     },
     ("executive", "annual"): {
-        "plan_id_env": "RAZORPAY_PLAN_EXECUTIVE_ANNUAL",
+        "settings_key": "razorpay_plan_executive_annual",
         "plan_name": "Executive Annual",
         "description": "Executive plan billed annually",
-        "amount": 4680000,
+        "amount": 24999900,
     },
 }
 
 
 def create_checkout_subscription(payload: BillingCheckoutRequest) -> dict:
     _require_razorpay_config()
+    if payload.billing_cycle == "lifetime" or payload.tier == "earlybird":
+        return create_lifetime_payment_link(payload)
+
     meta = _plan_meta(payload.tier, payload.billing_cycle)
     response = requests.post(
         "https://api.razorpay.com/v1/subscriptions",
@@ -78,13 +81,69 @@ def create_checkout_subscription(payload: BillingCheckoutRequest) -> dict:
     return {
         "status": "created",
         "provider": "razorpay",
+        "flow_type": "subscription",
         "key_id": settings.razorpay_key_id,
         "subscription_id": subscription["id"],
         "plan_id": meta["plan_id"],
+        "checkout_url": None,
         "amount": meta["amount"],
         "currency": "INR",
         "plan_name": meta["plan_name"],
         "description": meta["description"],
+        "customer": {
+            "name": payload.name or "",
+            "email": payload.email or "",
+        },
+    }
+
+
+def create_lifetime_payment_link(payload: BillingCheckoutRequest) -> dict:
+    if count_lifetime_claims() >= settings.razorpay_lifetime_limit:
+        raise RuntimeError("The earlybird lifetime offer is sold out.")
+    amount = settings.razorpay_lifetime_amount
+    response = requests.post(
+        "https://api.razorpay.com/v1/payment_links",
+        headers={
+            "Authorization": f"Basic {_basic_auth()}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "amount": amount,
+            "currency": "INR",
+            "description": "DeckMint Earlybird Lifetime access",
+            "reference_id": f"deckmint-lifetime-{int(time.time())}",
+            "customer": {
+                "name": payload.name or "",
+                "email": payload.email or "",
+            },
+            "notify": {
+                "email": bool(payload.email),
+                "sms": False,
+            },
+            "notes": {
+                "tier": "earlybird",
+                "billing_cycle": "lifetime",
+                "product": settings.app_name,
+            },
+            "callback_url": f"{settings.web_base_url.rstrip('/')}/#pricing",
+            "callback_method": "get",
+        },
+        timeout=45,
+    )
+    response.raise_for_status()
+    payment_link = response.json()
+    return {
+        "status": "created",
+        "provider": "razorpay",
+        "flow_type": "payment_link",
+        "key_id": None,
+        "subscription_id": None,
+        "plan_id": None,
+        "checkout_url": payment_link.get("short_url") or payment_link.get("payment_link_url"),
+        "amount": amount,
+        "currency": "INR",
+        "plan_name": "Earlybird Lifetime",
+        "description": "One-time launch offer for lifetime creator access",
         "customer": {
             "name": payload.name or "",
             "email": payload.email or "",
@@ -124,10 +183,10 @@ def _basic_auth() -> str:
 
 def _plan_meta(tier: str, billing_cycle: str) -> dict:
     meta = PLAN_MATRIX[(tier, billing_cycle)].copy()
-    plan_id = os.getenv(meta["plan_id_env"])
+    plan_id = getattr(settings, meta["settings_key"], None)
     if not plan_id:
         raise RuntimeError(
-            f"Missing Razorpay plan id env var {meta['plan_id_env']}. "
+            f"Missing Razorpay plan id setting {meta['settings_key']}. "
             "Create separate Razorpay plans for each tier and billing cycle."
         )
     meta["plan_id"] = plan_id

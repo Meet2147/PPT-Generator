@@ -1,10 +1,7 @@
 import asyncio
 import re
 import uuid
-from io import BytesIO
 from pathlib import Path
-
-import requests
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE
@@ -12,7 +9,7 @@ from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
 from app.config import settings
-from app.models import DeckDraft, GenerationRequest
+from app.models import DeckDraft, GenerationRequest, PreviewSlide
 
 
 PALETTES = {
@@ -37,10 +34,28 @@ async def build_presentation(request: GenerationRequest, deck: DeckDraft) -> Pat
     for index, slide in enumerate(deck.slides, start=1):
         _build_content_slide(presentation, slide.title, slide.content, index, len(deck.slides), palette)
 
-    safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "-", deck.title.lower()).strip("-") or "deckmint"
-    file_path = settings.generated_dir / f"{safe_name}-{uuid.uuid4().hex[:8]}.pptx"
+    file_path = settings.generated_dir / f"{build_file_stem(deck.title)}.pptx"
     await asyncio.to_thread(presentation.save, str(file_path))
     return file_path
+
+
+def build_preview_slides(request: GenerationRequest, deck: DeckDraft) -> list[PreviewSlide]:
+    palette = PALETTES.get(request.design_number, PALETTES[2])
+    return [
+        PreviewSlide(
+            number=slide.number,
+            title=slide.title,
+            content=slide.content,
+            accent=f"#{palette['accent']}",
+            vibe=f"#{palette['bg']}",
+        )
+        for slide in deck.slides
+    ]
+
+
+def build_file_stem(title: str) -> str:
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "-", title.lower()).strip("-") or "deckmint"
+    return f"{safe_name}-{uuid.uuid4().hex[:8]}"
 
 
 def _build_cover_slide(presentation: Presentation, deck: DeckDraft, palette: dict[str, str], request: GenerationRequest) -> None:

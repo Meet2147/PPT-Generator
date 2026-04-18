@@ -19,44 +19,78 @@
           <div class="brand-mark">D</div>
           <div>
             <p class="eyebrow">DeckMint</p>
-            <h1>Gamma-style presentation generation, built for PowerPoint users.</h1>
+            <h1>AI presentation generation built for editable PowerPoint output.</h1>
           </div>
         </div>
-        <a class="ghost-button" href="#pricing">See pricing</a>
+        <div class="topbar-actions">
+          <span id="user-chip" class="user-chip" hidden></span>
+          <a class="ghost-button" href="#pricing">See pricing</a>
+        </div>
       </header>
 
       <main>
         <section class="hero-grid">
           <div class="hero-copy">
-            <span class="pill">Subscription-first</span>
-            <h2>Generate polished decks that feel client-ready on the first export.</h2>
+            <span class="pill">Preview-first workflow</span>
+            <h2>Create the deck, inspect the slides, then export PPTX and PDF together.</h2>
             <p>
-              DeckMint combines a clean web app with a FastAPI backend so we can sell it as a
-              real product, not just an endpoint. The output is structured for students, teams,
-              and executives who need professional slides fast.
+              Sign in, generate a narrative preview, and export presentation files only when the
+              story already looks right. This keeps the product feeling fast, intentional, and
+              professional.
             </p>
             <div class="hero-points">
               <div>
-                <strong>Editable PPTX</strong>
-                <span>No screenshot slides. Real presentation files.</span>
+                <strong>Real accounts</strong>
+                <span>Signup, login, and deck history are now part of the product.</span>
               </div>
               <div>
-                <strong>Better than credits</strong>
-                <span>Predictable subscriptions make pricing easier to sell.</span>
+                <strong>Slide previews</strong>
+                <span>Users can inspect the generated structure before download.</span>
               </div>
               <div>
-                <strong>Faster storytelling</strong>
-                <span>Prompt, narrative, design preset, export.</span>
+                <strong>PPTX + PDF</strong>
+                <span>Optional dual export for clients who want both formats immediately.</span>
               </div>
             </div>
           </div>
 
           <div class="hero-panel">
-            <div class="glass-card">
+            <div class="glass-card auth-card" id="auth-card">
               <div class="glass-header">
                 <span class="signal-dot"></span>
-                <span>Generate a presentation</span>
+                <span>Account access</span>
               </div>
+              <div class="auth-toggle">
+                <button id="show-login" class="toggle-button active" type="button">Login</button>
+                <button id="show-signup" class="toggle-button" type="button">Signup</button>
+              </div>
+              <form id="auth-form">
+                <label id="signup-name-wrap" hidden>
+                  Full name
+                  <input id="auth-name" type="text" placeholder="Meet Jethwa" />
+                </label>
+                <label>
+                  Email
+                  <input id="auth-email" type="email" placeholder="meet@example.com" required />
+                </label>
+                <label>
+                  Password
+                  <input id="auth-password" type="password" placeholder="At least 8 characters" required />
+                </label>
+                <button class="primary-button" id="auth-submit" type="submit">Login</button>
+              </form>
+              <div id="auth-result" class="result-card" hidden></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="workspace-grid">
+          <div class="workspace-panel">
+            <div class="section-copy">
+              <p class="eyebrow">Workspace</p>
+              <h3>Generate, preview, and export in one place.</h3>
+            </div>
+            <div class="workspace-card">
               <form id="deck-form">
                 <label>
                   Topic
@@ -105,48 +139,54 @@
                     <input id="buyer_email" name="buyer_email" type="email" value="meet@example.com" />
                   </label>
                 </div>
-                <button class="primary-button" type="submit">Generate deck</button>
+                <label class="checkbox-row">
+                  <input id="export_pdf" type="checkbox" />
+                  <span>Also export a PDF version alongside the PPTX</span>
+                </label>
+                <div class="button-row">
+                  <button class="ghost-button" id="preview-submit" type="button">Preview slides</button>
+                  <button class="primary-button" id="generate-submit" type="submit">Generate files</button>
+                </div>
               </form>
               <div id="result" class="result-card" hidden></div>
             </div>
           </div>
+
+          <div class="preview-panel">
+            <div class="section-copy">
+              <p class="eyebrow">Live preview</p>
+              <h3>Visualize the generated slides before export.</h3>
+            </div>
+            <div id="preview-summary" class="preview-summary">Sign in and click Preview slides to see the generated deck structure here.</div>
+            <div id="preview-grid" class="preview-grid"></div>
+          </div>
         </section>
 
-        <section class="stats-row">
-          <article>
-            <span>Positioning</span>
-            <strong>Gamma-like UX</strong>
-            <p>But optimized around PowerPoint export quality and subscription simplicity.</p>
-          </article>
-          <article>
-            <span>Backend</span>
-            <strong>FastAPI</strong>
-            <p>Ready for auth, billing, analytics, and future workspace features.</p>
-          </article>
-          <article>
-            <span>Packaging</span>
-            <strong>Web app + API</strong>
-            <p>Sell the app directly and expose the API later for power users.</p>
-          </article>
+        <section class="history-section">
+          <div class="section-copy">
+            <p class="eyebrow">Deck history</p>
+            <h3>Your recent exports.</h3>
+          </div>
+          <div id="history-list" class="history-list">
+            <div class="history-empty">Sign in to keep track of generated decks and downloads.</div>
+          </div>
         </section>
 
         <section id="pricing" class="pricing-section">
           <div class="section-copy">
             <p class="eyebrow">Pricing</p>
-            <h3>Competitive subscription tiers, without credit confusion.</h3>
-            <p>
-              We benchmarked Gamma’s current public plan structure around tiered subscriptions and
-              positioned this product around predictable monthly and annual plans for clear upsell paths.
-            </p>
+            <h3>Plans designed around real usage, plus a launch-only lifetime offer.</h3>
           </div>
           <div class="billing-toggle" id="billing-toggle">
             <button class="toggle-button active" data-plan="monthly">Monthly</button>
             <button class="toggle-button" data-plan="annual">Annual</button>
           </div>
           <div id="pricing-grid" class="pricing-grid"></div>
+          <div id="lifetime-offer" class="lifetime-wrap"></div>
         </section>
       </main>
     </div>
+    <script src="/config.js"></script>
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script src="/app.js" defer></script>
   </body>

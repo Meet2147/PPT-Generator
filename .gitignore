@@ -1,5 +1,7 @@
 .fastapicloud
+.env
 __pycache__/
 *.pyc
 Cache/
 GeneratedPresentations/
+web-dist/
