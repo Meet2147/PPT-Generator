@@ -14,37 +14,37 @@ PLAN_MATRIX = {
         "settings_key": "razorpay_plan_student_monthly",
         "plan_name": "Student Monthly",
         "description": "Student plan billed monthly",
-        "amount": 299900,
+        "amount": 29900,
     },
     ("student", "annual"): {
         "settings_key": "razorpay_plan_student_annual",
         "plan_name": "Student Annual",
         "description": "Student plan billed annually",
-        "amount": 2999900,
+        "amount": 299900,
     },
     ("corporate", "monthly"): {
         "settings_key": "razorpay_plan_corporate_monthly",
         "plan_name": "Corporate Monthly",
         "description": "Corporate plan billed monthly",
-        "amount": 999900,
+        "amount": 79900,
     },
     ("corporate", "annual"): {
         "settings_key": "razorpay_plan_corporate_annual",
         "plan_name": "Corporate Annual",
         "description": "Corporate plan billed annually",
-        "amount": 9999900,
+        "amount": 799900,
     },
     ("executive", "monthly"): {
         "settings_key": "razorpay_plan_executive_monthly",
         "plan_name": "Executive Monthly",
         "description": "Executive plan billed monthly",
-        "amount": 2499900,
+        "amount": 179900,
     },
     ("executive", "annual"): {
         "settings_key": "razorpay_plan_executive_annual",
         "plan_name": "Executive Annual",
         "description": "Executive plan billed annually",
-        "amount": 24999900,
+        "amount": 1799900,
     },
 }
 
