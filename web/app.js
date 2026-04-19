@@ -138,6 +138,7 @@ function renderPricing() {
             <p>${plan.description}</p>
           </div>
           <div class="plan-price">${formattedPrice}<small>${suffix}</small></div>
+          <div class="plan-quota">Up to ${plan.monthly_presentation_cap} presentations per month</div>
           <div class="plan-savings">${plan.savings_label}</div>
           <ul>${plan.features.map((feature) => `<li>${feature.label}</li>`).join("")}</ul>
           <button class="primary-button subscribe-button" data-tier="${plan.slug}" type="button">${plan.cta}</button>

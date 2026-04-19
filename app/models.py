@@ -20,6 +20,8 @@ class SubscriptionPlan(BaseModel):
     audience: str
     price_monthly: int
     price_annual: int
+    monthly_presentation_cap: int
+    annual_monthly_presentation_cap: int
     savings_label: str
     description: str
     cta: str
