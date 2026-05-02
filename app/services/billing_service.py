@@ -76,6 +76,7 @@ def create_checkout_subscription(payload: BillingCheckoutRequest) -> dict:
         },
         timeout=45,
     )
+    _raise_for_razorpay_error(response, meta)
     response.raise_for_status()
     subscription = response.json()
     return {
@@ -130,6 +131,7 @@ def create_lifetime_payment_link(payload: BillingCheckoutRequest) -> dict:
         },
         timeout=45,
     )
+    _raise_for_razorpay_error(response)
     response.raise_for_status()
     payment_link = response.json()
     return {
@@ -191,3 +193,23 @@ def _plan_meta(tier: str, billing_cycle: str) -> dict:
         )
     meta["plan_id"] = plan_id
     return meta
+
+
+def _raise_for_razorpay_error(response: requests.Response, meta: dict | None = None) -> None:
+    if response.ok:
+        return
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return
+
+    error = payload.get("error") or {}
+    code = error.get("code")
+    description = (error.get("description") or "").strip()
+
+    if code == "BAD_REQUEST_ERROR" and "could not be found" in description.lower() and meta:
+        raise RuntimeError(
+            f"The configured Razorpay plan for {meta['plan_name']} is invalid for the active account mode. "
+            f"Update {meta['settings_key']} in Render with a live Razorpay plan ID."
+        )
