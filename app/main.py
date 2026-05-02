@@ -207,7 +207,8 @@ async def create_billing_checkout(payload: BillingCheckoutRequest) -> BillingChe
     return BillingCheckoutResponse(**checkout)
 
 
-@app.post("/api/v1/billing/webhooks/razorpay", response_model=BillingWebhookResponse)
+@app.post("/api/v1/billing/webhooks/razorpay", response_model=BillingWebhookResponse, include_in_schema=False)
+@app.post("/api/payments/webhook", response_model=BillingWebhookResponse)
 async def razorpay_webhook(request: Request) -> BillingWebhookResponse:
     raw_body = await request.body()
     signature = request.headers.get("X-Razorpay-Signature")

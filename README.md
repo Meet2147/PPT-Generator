@@ -16,7 +16,7 @@ DeckMint is a subscription-first presentation generation product built as both a
 - `POST /api/v1/presentations/generate`
 - `GET /api/v1/presentations/download/{filename}`
 - `POST /api/v1/billing/checkout`
-- `POST /api/v1/billing/webhooks/razorpay`
+- `POST /api/payments/webhook`
 - `POST /api/v1/docs-token`
 
 ## Local run
@@ -61,6 +61,10 @@ Use Razorpay Subscriptions for this product and create six plans:
 Then map those plan ids into the matching environment variables above.
 
 The `Earlybird Lifetime` offer is intentionally handled as a one-time Razorpay Payment Link instead of a subscription.
+
+For production, configure the Razorpay webhook URL as:
+
+`https://api.dashovia.com/api/payments/webhook`
 
 ## Render split deployment
 
